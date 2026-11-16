@@ -2,5 +2,7 @@
   "name": "DriveTopic — Google Drive Content Analyzer & Auto-Renamer",
   "description": "Connects to Google Drive, analyzes document and text content to extract core topics, and renames files with an explicit confirmation workflow and audit trail.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

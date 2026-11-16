@@ -17,11 +17,9 @@ const provider = new GoogleAuthProvider();
 for (const scope of DRIVE_SCOPES) {
   provider.addScope(scope);
 }
-provider.setCustomParameters({
-  prompt: 'consent',
-});
 
 let isSigningIn = false;
+let activeSignInPromise: Promise<{ user: User; accessToken: string } | null> | null = null;
 // Access token is strictly kept in memory only (never localStorage or sessionStorage).
 let cachedAccessToken: string | null = null;
 
@@ -44,19 +42,50 @@ export const initAuth = (
   });
 };
 
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string }> => {
-  try {
-    isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Google Drive access token was not returned. Please grant Drive permission.');
-    }
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
-  } finally {
-    isSigningIn = false;
+export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  if (activeSignInPromise) {
+    return activeSignInPromise;
   }
+
+  activeSignInPromise = (async () => {
+    try {
+      isSigningIn = true;
+      const result = await signInWithPopup(auth, provider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (!credential?.accessToken) {
+        throw new Error(
+          'Google Drive access permission was not granted. Please allow Drive access when signing in.'
+        );
+      }
+      cachedAccessToken = credential.accessToken;
+      return { user: result.user, accessToken: cachedAccessToken };
+    } catch (error: unknown) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code?: unknown }).code)
+          : '';
+
+      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+        return null;
+      }
+      if (code === 'auth/popup-blocked') {
+        throw new Error(
+          'Your browser blocked the Google Sign-In popup. Please enable popups for this site and try again.'
+        );
+      }
+      if (code === 'auth/unauthorized-domain') {
+        throw new Error(
+          'This domain is not authorized for Google Sign-In in Firebase Authentication settings.'
+        );
+      }
+      throw error;
+    } finally {
+      isSigningIn = false;
+      activeSignInPromise = null;
+    }
+  })();
+
+  return activeSignInPromise;
 };
 
 export const getAccessToken = (): string | null => {

@@ -235,6 +235,12 @@ export default function App() {
     setBannerNotice(null);
     try {
       const result = await googleSignIn();
+      if (!result) {
+        setBannerNotice(
+          'Sign-in was cancelled before completion. Click "Sign in with Google" whenever you are ready to connect Google Drive.'
+        );
+        return;
+      }
       setUser(result.user);
       setNeedsAuth(false);
       await loadDriveFiles(result.accessToken);
@@ -718,21 +724,21 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      {/* Top Bar Contract: Exactly 3 zones separated by gap-8 */}
+    <div className="min-h-screen w-full overflow-x-clip bg-slate-50 text-slate-900">
+      {/* Top Bar Contract: Compact sticky bar (< 15% mobile height) */}
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-8 px-6 py-3.5">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:gap-8 sm:px-6 sm:py-3.5">
           {/* Zone 1: Single-line brand wordmark */}
           <button
             type="button"
             onClick={() => setActiveTab('workspace')}
-            className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-blue-600"
+            className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-blue-600 sm:text-lg"
           >
             DriveTopic
           </button>
 
-          {/* Zone 2: Clean single-line text navigation links */}
-          <nav className="flex items-center gap-6 text-sm font-medium">
+          {/* Zone 2: Clean single-line text navigation links (desktop/tablet) */}
+          <nav className="hidden items-center gap-6 text-sm font-medium md:flex">
             <button
               type="button"
               onClick={() => setActiveTab('workspace')}
@@ -769,7 +775,7 @@ export default function App() {
           </nav>
 
           {/* Zone 3: Single primary auth action */}
-          <div className="flex items-center shrink-0">
+          <div className="flex min-w-0 items-center shrink-0">
             {needsAuth ? (
               <GoogleSignInButton
                 onClick={handleSignIn}
@@ -780,7 +786,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0 sm:h-9 sm:px-3.5"
               >
                 <LogOut className="h-4 w-4 text-slate-500" aria-hidden="true" />
                 <span>Sign Out</span>
@@ -790,21 +796,61 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8">
+      {/* Mobile Navigation Bar (non-sticky to preserve mobile viewport space) */}
+      <nav
+        aria-label="Mobile navigation"
+        className="grid grid-cols-3 border-b border-slate-200 bg-white md:hidden"
+      >
+        <button
+          type="button"
+          onClick={() => setActiveTab('workspace')}
+          className={`min-h-[44px] border-b-2 px-2 text-xs font-medium transition-colors whitespace-nowrap ${
+            activeTab === 'workspace'
+              ? 'border-blue-600 text-slate-900'
+              : 'border-transparent text-slate-600'
+          }`}
+        >
+          Workspace
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('audit')}
+          className={`min-h-[44px] border-b-2 px-2 text-xs font-medium transition-colors whitespace-nowrap tabular-nums ${
+            activeTab === 'audit'
+              ? 'border-blue-600 text-slate-900'
+              : 'border-transparent text-slate-600'
+          }`}
+        >
+          Audit ({auditEntries.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('guide')}
+          className={`min-h-[44px] border-b-2 px-2 text-xs font-medium transition-colors whitespace-nowrap ${
+            activeTab === 'guide'
+              ? 'border-blue-600 text-slate-900'
+              : 'border-transparent text-slate-600'
+          }`}
+        >
+          How It Works
+        </button>
+      </nav>
+
+      <main className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-8">
         {/* Notifications */}
         {bannerError && (
           <div
             role="alert"
-            className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+            className="mb-5 flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:mb-6 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
           >
-            <div className="flex items-center gap-2.5">
-              <AlertCircle className="h-4 w-4 shrink-0 text-red-600" aria-hidden="true" />
-              <span>{bannerError}</span>
+            <div className="flex min-w-0 items-start gap-2.5 sm:items-center">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 sm:mt-0" aria-hidden="true" />
+              <span className="min-w-0 break-words">{bannerError}</span>
             </div>
             <button
               type="button"
               onClick={() => setBannerError(null)}
-              className="text-xs font-medium text-red-700 hover:underline whitespace-nowrap shrink-0"
+              className="self-end text-xs font-medium text-red-700 hover:underline whitespace-nowrap shrink-0 sm:self-auto"
             >
               Dismiss
             </button>
@@ -814,16 +860,16 @@ export default function App() {
         {bannerNotice && (
           <div
             role="status"
-            className="mb-6 flex items-center justify-between gap-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+            className="mb-5 flex flex-col gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 sm:mb-6 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
           >
-            <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden="true" />
-              <span>{bannerNotice}</span>
+            <div className="flex min-w-0 items-start gap-2.5 sm:items-center">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 sm:mt-0" aria-hidden="true" />
+              <span className="min-w-0 break-words">{bannerNotice}</span>
             </div>
             <button
               type="button"
               onClick={() => setBannerNotice(null)}
-              className="text-xs font-medium text-emerald-800 hover:underline whitespace-nowrap shrink-0"
+              className="self-end text-xs font-medium text-emerald-800 hover:underline whitespace-nowrap shrink-0 sm:self-auto"
             >
               Dismiss
             </button>
@@ -831,9 +877,9 @@ export default function App() {
         )}
 
         {activeTab === 'guide' ? (
-          <section className="rounded-lg border border-slate-200 bg-white p-8">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 sm:p-8">
             <div className="max-w-3xl">
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+              <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
                 Automated Topic-Based Google Drive Renaming
               </h1>
               <p className="mt-2 text-sm leading-relaxed text-slate-600">
@@ -842,8 +888,8 @@ export default function App() {
                 standardized filenames for your explicit approval.
               </p>
 
-              <div className="mt-8 grid gap-6 border-t border-slate-200 pt-8 sm:grid-cols-3">
-                <div>
+              <div className="mt-6 grid gap-6 border-t border-slate-200 pt-6 sm:mt-8 sm:grid-cols-3 sm:pt-8">
+                <div className="min-w-0">
                   <div className="font-mono text-xs font-medium text-slate-500">01. Connect</div>
                   <h2 className="mt-1 text-base font-semibold text-slate-900">
                     Scoped Drive Access
@@ -855,7 +901,7 @@ export default function App() {
                   </p>
                 </div>
 
-                <div>
+                <div className="min-w-0">
                   <div className="font-mono text-xs font-medium text-slate-500">02. Analyze</div>
                   <h2 className="mt-1 text-base font-semibold text-slate-900">
                     Content Topic Extraction
@@ -866,7 +912,7 @@ export default function App() {
                   </p>
                 </div>
 
-                <div>
+                <div className="min-w-0">
                   <div className="font-mono text-xs font-medium text-slate-500">03. Confirm</div>
                   <h2 className="mt-1 text-base font-semibold text-slate-900">
                     Reviewed Batch Rename
@@ -887,21 +933,21 @@ export default function App() {
           />
         ) : needsAuth ? (
           /* Unauthenticated Landing Workspace */
-          <section className="rounded-lg border border-slate-200 bg-white p-8 sm:p-12">
-            <div className="grid items-center gap-10 lg:grid-cols-12">
-              <div className="lg:col-span-7">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 sm:p-8 lg:p-12">
+            <div className="grid items-center gap-8 lg:grid-cols-12 lg:gap-10">
+              <div className="min-w-0 lg:col-span-7">
                 <p className="text-xs font-medium text-slate-500">
                   Google Drive Document Intelligence · Scoped Permission
                 </p>
-                <h1 className="mt-2 max-w-2xl text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl [text-wrap:balance]">
+                <h1 className="mt-2 max-w-2xl text-2xl font-bold tracking-tight text-slate-900 sm:text-4xl [text-wrap:balance]">
                   Turn cryptic Drive filenames into clear, content-accurate titles.
                 </h1>
-                <p className="mt-4 max-w-xl text-base leading-relaxed text-slate-600">
+                <p className="mt-3 max-w-xl text-sm leading-relaxed text-slate-600 sm:mt-4 sm:text-base">
                   Connect your Google Drive to extract document snippets, determine each file&apos;s
                   core topic, and apply standardized renames in a single audited workflow.
                 </p>
 
-                <div className="mt-7 flex flex-wrap items-center gap-4">
+                <div className="mt-6 flex flex-wrap items-center gap-4 sm:mt-7">
                   <GoogleSignInButton
                     onClick={handleSignIn}
                     disabled={isLoggingIn}
@@ -910,22 +956,24 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setActiveTab('guide')}
-                    className="text-sm font-medium text-slate-600 hover:text-slate-900 whitespace-nowrap shrink-0"
+                    className="min-h-[40px] text-sm font-medium text-slate-600 hover:text-slate-900 whitespace-nowrap shrink-0"
                   >
                     Read architecture overview
                   </button>
                 </div>
               </div>
 
-              <div className="lg:col-span-5">
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-5">
+              <div className="min-w-0 lg:col-span-5">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 sm:p-5">
                   <div className="border-b border-slate-200 pb-3 text-xs font-semibold text-slate-700">
                     Example Transformation Preview
                   </div>
                   <div className="divide-y divide-slate-200">
                     <div className="py-3">
-                      <div className="font-mono text-xs text-slate-500">untitled_export_04.txt</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                      <div className="break-words font-mono text-xs text-slate-500">
+                        untitled_export_04.txt
+                      </div>
+                      <div className="mt-1 break-words text-sm font-semibold text-slate-900">
                         Q4 Cloud Infrastructure Cost Audit.txt
                       </div>
                       <div className="mt-0.5 text-xs text-slate-500">
@@ -933,8 +981,10 @@ export default function App() {
                       </div>
                     </div>
                     <div className="py-3">
-                      <div className="font-mono text-xs text-slate-500">raw_meeting_dump_v2</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                      <div className="break-words font-mono text-xs text-slate-500">
+                        raw_meeting_dump_v2
+                      </div>
+                      <div className="mt-1 break-words text-sm font-semibold text-slate-900">
                         Engineering Onboarding First 30 Days Guide
                       </div>
                       <div className="mt-0.5 text-xs text-slate-500">
@@ -942,8 +992,10 @@ export default function App() {
                       </div>
                     </div>
                     <div className="pt-3">
-                      <div className="font-mono text-xs text-slate-500">notes_temp_991.md</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                      <div className="break-words font-mono text-xs text-slate-500">
+                        notes_temp_991.md
+                      </div>
+                      <div className="mt-1 break-words text-sm font-semibold text-slate-900">
                         Customer Churn Exit Interview Synthesis.md
                       </div>
                       <div className="mt-0.5 text-xs text-slate-500">
@@ -957,24 +1009,24 @@ export default function App() {
           </section>
         ) : (
           /* Authenticated Workspace */
-          <div className="space-y-6">
+          <div className="space-y-5 sm:space-y-6">
             {/* Workspace Header & KPI Summary Row */}
-            <section className="rounded-lg border border-slate-200 bg-white">
-              <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h1 className="text-xl font-bold tracking-tight text-slate-900">
+            <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="flex flex-col gap-4 border-b border-slate-200 px-4 py-4 sm:px-6 sm:py-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="min-w-0">
+                  <h1 className="text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
                     Drive Document Renamer
                   </h1>
-                  <p className="mt-0.5 text-sm text-slate-600">
+                  <p className="mt-0.5 break-words text-xs text-slate-600 sm:text-sm">
                     Signed in as{' '}
-                    <span className="font-medium text-slate-900">
+                    <span className="break-all font-medium text-slate-900">
                       {user?.email || user?.displayName || 'Google Drive User'}
                     </span>{' '}
                     · Scoped to app-authorized Drive files
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
+                <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:gap-2.5">
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -987,47 +1039,47 @@ export default function App() {
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap sm:h-9 sm:text-sm"
                   >
                     {isUploading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
                     ) : (
-                      <Upload className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                      <Upload className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                     )}
-                    <span>{isUploading ? 'Uploading...' : 'Upload to Drive'}</span>
+                    <span className="truncate">{isUploading ? 'Uploading...' : 'Upload to Drive'}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleOpenPicker}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap sm:h-9 sm:text-sm"
                   >
-                    <FolderOpen className="h-4 w-4 text-slate-500" aria-hidden="true" />
-                    <span>Select from Drive</span>
+                    <FolderOpen className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                    <span className="truncate">Select from Drive</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleSeedSamples}
                     disabled={isSeeding}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap sm:h-9 sm:text-sm"
                   >
                     {isSeeding ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
                     ) : (
-                      <FilePlus2 className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                      <FilePlus2 className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                     )}
-                    <span>{isSeeding ? 'Creating...' : 'Create Sample Files'}</span>
+                    <span className="truncate">{isSeeding ? 'Creating...' : 'Sample Files'}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => void loadDriveFiles()}
                     disabled={isLoadingFiles}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap sm:h-9 sm:text-sm"
                   >
                     <RefreshCw
-                      className={`h-4 w-4 text-slate-500 ${isLoadingFiles ? 'animate-spin' : ''}`}
+                      className={`h-4 w-4 shrink-0 text-slate-500 ${isLoadingFiles ? 'animate-spin' : ''}`}
                       aria-hidden="true"
                     />
                     <span>Refresh</span>
@@ -1035,40 +1087,40 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 4-Column Tabular Metrics Strip */}
-              <div className="grid grid-cols-2 divide-y divide-slate-200 sm:grid-cols-4 sm:divide-x sm:divide-y-0">
-                <div className="px-6 py-4">
+              {/* 4-Column Tabular Metrics Strip with clean hairline grid */}
+              <div className="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-4">
+                <div className="bg-white px-4 py-3.5 sm:px-6 sm:py-4">
                   <div className="text-xs font-medium text-slate-500">Files Indexed</div>
-                  <div className="mt-1 font-mono text-2xl font-semibold text-slate-900 tabular-nums">
+                  <div className="mt-1 font-mono text-xl font-semibold text-slate-900 tabular-nums sm:text-2xl">
                     {stats.total}
                   </div>
                 </div>
-                <div className="px-6 py-4">
+                <div className="bg-white px-4 py-3.5 sm:px-6 sm:py-4">
                   <div className="text-xs font-medium text-slate-500">Topics Extracted</div>
-                  <div className="mt-1 font-mono text-2xl font-semibold text-slate-900 tabular-nums">
+                  <div className="mt-1 font-mono text-xl font-semibold text-slate-900 tabular-nums sm:text-2xl">
                     {stats.analyzed}
                   </div>
                 </div>
-                <div className="px-6 py-4">
+                <div className="bg-white px-4 py-3.5 sm:px-6 sm:py-4">
                   <div className="text-xs font-medium text-slate-500">Ready to Rename</div>
-                  <div className="mt-1 font-mono text-2xl font-semibold text-blue-600 tabular-nums">
+                  <div className="mt-1 font-mono text-xl font-semibold text-blue-600 tabular-nums sm:text-2xl">
                     {stats.pendingRenames}
                   </div>
                 </div>
-                <div className="px-6 py-4">
+                <div className="bg-white px-4 py-3.5 sm:px-6 sm:py-4">
                   <div className="text-xs font-medium text-slate-500">Completed Renames</div>
-                  <div className="mt-1 font-mono text-2xl font-semibold text-emerald-700 tabular-nums">
+                  <div className="mt-1 font-mono text-xl font-semibold text-emerald-700 tabular-nums sm:text-2xl">
                     {stats.completedRenames}
                   </div>
                 </div>
               </div>
             </section>
 
-            {/* Workspace Toolbar & File Table */}
-            <section className="rounded-lg border border-slate-200 bg-white">
-              <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="relative">
+            {/* Workspace Toolbar & File List */}
+            <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:gap-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+                  <div className="relative w-full sm:w-56">
                     <Search
                       className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
                       aria-hidden="true"
@@ -1078,11 +1130,11 @@ export default function App() {
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Search files or topics..."
-                      className="h-9 w-56 rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none"
+                      className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none sm:h-9"
                     />
                   </div>
 
-                  <div className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 p-1">
+                  <div className="grid grid-cols-4 gap-1 rounded-md border border-slate-200 bg-slate-100 p-1 sm:flex sm:items-center">
                     {(
                       [
                         { id: 'all', label: 'All' },
@@ -1095,7 +1147,7 @@ export default function App() {
                         key={tab.id}
                         type="button"
                         onClick={() => setStatusFilter(tab.id)}
-                        className={`rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        className={`rounded px-2 py-1.5 text-center text-xs font-medium transition-colors whitespace-nowrap sm:px-2.5 sm:py-1 ${
                           statusFilter === tab.id
                             ? 'bg-white text-slate-900 shadow-sm'
                             : 'text-slate-600 hover:text-slate-900'
@@ -1106,7 +1158,7 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center justify-between gap-2 sm:justify-start">
                     <label htmlFor="naming-style-select" className="text-xs font-medium text-slate-500">
                       Format
                     </label>
@@ -1114,7 +1166,7 @@ export default function App() {
                       id="naming-style-select"
                       value={namingStyle}
                       onChange={(e) => handleNamingStyleChange(e.target.value as NamingStyle)}
-                      className="h-9 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-800 focus:border-blue-600 focus:outline-none"
+                      className="h-10 flex-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-800 focus:border-blue-600 focus:outline-none sm:h-9 sm:flex-none"
                     >
                       <option value="title-case">Title Case</option>
                       <option value="kebab-case">kebab-case</option>
@@ -1123,7 +1175,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="grid grid-cols-2 gap-2.5 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
                   <button
                     type="button"
                     disabled={isAnalyzingBatch || files.length === 0}
@@ -1134,18 +1186,18 @@ export default function App() {
                           : files;
                       void handleAnalyzeFiles(targets);
                     }}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap shrink-0"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:px-3.5 sm:text-sm"
                   >
                     {isAnalyzingBatch ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" aria-hidden="true" />
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-600" aria-hidden="true" />
                     ) : (
-                      <Sparkles className="h-4 w-4 text-blue-600" aria-hidden="true" />
+                      <Sparkles className="h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
                     )}
-                    <span>
+                    <span className="truncate">
                       {isAnalyzingBatch
-                        ? 'Analyzing Content...'
+                        ? 'Analyzing...'
                         : stats.selectedForAnalysis > 0 && stats.selectedForAnalysis < files.length
-                          ? `Analyze Selected (${stats.selectedForAnalysis})`
+                          ? `Analyze (${stats.selectedForAnalysis})`
                           : 'Analyze All'}
                     </span>
                   </button>
@@ -1154,10 +1206,10 @@ export default function App() {
                     type="button"
                     disabled={stats.selectedReadyForRename === 0 || isExecutingRename}
                     onClick={requestBatchRename}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap shrink-0"
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:px-4 sm:text-sm"
                   >
-                    <Check className="h-4 w-4" aria-hidden="true" />
-                    <span>
+                    <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">
                       Batch Rename
                       {stats.selectedReadyForRename > 0
                         ? ` (${stats.selectedReadyForRename})`
@@ -1171,17 +1223,17 @@ export default function App() {
               {isLoadingFiles && files.length === 0 ? (
                 <div className="divide-y divide-slate-200">
                   {[1, 2, 3, 4].map((row) => (
-                    <div key={row} className="grid grid-cols-12 items-center gap-4 px-6 py-4">
-                      <div className="col-span-4 h-4 animate-pulse rounded bg-slate-200" />
-                      <div className="col-span-3 h-4 animate-pulse rounded bg-slate-200" />
-                      <div className="col-span-3 h-4 animate-pulse rounded bg-slate-200" />
-                      <div className="col-span-2 h-4 animate-pulse rounded bg-slate-200" />
+                    <div key={row} className="grid grid-cols-12 items-center gap-4 px-4 py-4 sm:px-6">
+                      <div className="col-span-6 h-4 animate-pulse rounded bg-slate-200 sm:col-span-4" />
+                      <div className="col-span-6 h-4 animate-pulse rounded bg-slate-200 sm:col-span-3" />
+                      <div className="hidden h-4 animate-pulse rounded bg-slate-200 sm:col-span-3 sm:block" />
+                      <div className="hidden h-4 animate-pulse rounded bg-slate-200 sm:col-span-2 sm:block" />
                     </div>
                   ))}
                 </div>
               ) : files.length === 0 ? (
                 /* Empty State */
-                <div className="px-6 py-16 text-center">
+                <div className="px-4 py-12 text-center sm:px-6 sm:py-16">
                   <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
                     <FileText className="h-5 w-5" aria-hidden="true" />
                   </div>
@@ -1193,36 +1245,36 @@ export default function App() {
                     <span className="font-mono text-xs text-slate-800">drive.file</span> scope, it
                     only sees files you select, upload, or create with this app.
                   </p>
-                  <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                  <div className="mt-6 flex flex-col items-stretch justify-center gap-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                     <button
                       type="button"
                       onClick={handleSeedSamples}
                       disabled={isSeeding}
-                      className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 whitespace-nowrap shrink-0"
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 whitespace-nowrap sm:h-10"
                     >
-                      <FilePlus2 className="h-4 w-4" aria-hidden="true" />
+                      <FilePlus2 className="h-4 w-4 shrink-0" aria-hidden="true" />
                       <span>{isSeeding ? 'Creating Sample Files...' : 'Create Sample Files in Drive'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap sm:h-10"
                     >
-                      <Upload className="h-4 w-4" aria-hidden="true" />
+                      <Upload className="h-4 w-4 shrink-0" aria-hidden="true" />
                       <span>Upload Text or Markdown</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleOpenPicker}
-                      className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap sm:h-10"
                     >
-                      <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                      <FolderOpen className="h-4 w-4 shrink-0" aria-hidden="true" />
                       <span>Select from Drive</span>
                     </button>
                   </div>
                 </div>
               ) : filteredFiles.length === 0 ? (
-                <div className="px-6 py-12 text-center">
+                <div className="px-4 py-12 text-center sm:px-6">
                   <p className="text-sm font-medium text-slate-900">No files match your current filter</p>
                   <button
                     type="button"
@@ -1230,34 +1282,31 @@ export default function App() {
                       setSearchQuery('');
                       setStatusFilter('all');
                     }}
-                    className="mt-2 text-sm font-medium text-blue-600 hover:underline"
+                    className="mt-2 min-h-[40px] text-sm font-medium text-blue-600 hover:underline"
                   >
                     Reset filters
                   </button>
                 </div>
               ) : (
-                /* High-Density File Table */
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
-                        <th className="w-10 px-6 py-3">
-                          <input
-                            type="checkbox"
-                            aria-label="Select all visible files"
-                            checked={allVisibleSelected}
-                            onChange={toggleSelectAllVisible}
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                          />
-                        </th>
-                        <th className="px-4 py-3">Original File</th>
-                        <th className="px-4 py-3">Core Topic &amp; Summary</th>
-                        <th className="px-4 py-3">Proposed Filename</th>
-                        <th className="px-4 py-3">Status</th>
-                        <th className="px-6 py-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
+                <>
+                  {/* Mobile & Tablet Stacked Card-Row List (Zero Horizontal Overflow) */}
+                  <div className="lg:hidden">
+                    <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-medium text-slate-600">
+                      <label className="inline-flex min-h-[36px] items-center gap-2.5">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={toggleSelectAllVisible}
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                        />
+                        <span>Select all ({filteredFiles.length})</span>
+                      </label>
+                      <span className="tabular-nums text-slate-500">
+                        {stats.selectedForAnalysis} selected
+                      </span>
+                    </div>
+
+                    <div className="divide-y divide-slate-200">
                       {filteredFiles.map((file) => {
                         const proposedValue = file.editedName ?? file.proposedName ?? '';
                         const hasProposedChange =
@@ -1266,128 +1315,121 @@ export default function App() {
                           proposedValue.trim() !== file.name;
 
                         return (
-                          <tr key={file.id} className="align-top hover:bg-slate-50/70">
-                            <td className="px-6 py-4">
-                              <input
-                                type="checkbox"
-                                aria-label={`Select ${file.name}`}
-                                checked={Boolean(file.selected)}
-                                onChange={() => toggleSelectFile(file.id)}
-                                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                              />
-                            </td>
-
-                            <td className="max-w-[240px] px-4 py-3.5">
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setInspectedFileId(file.id)}
-                                  className="truncate text-left font-medium text-slate-900 hover:text-blue-600 hover:underline"
-                                  title={file.name}
-                                >
-                                  {file.name}
-                                </button>
-                              </div>
-                              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
-                                <span>{friendlyMimeLabel(file.mimeType)}</span>
-                                <span aria-hidden="true">·</span>
-                                <span>{formatBytes(file.size)}</span>
-                                <span aria-hidden="true">·</span>
-                                <span>{formatShortDate(file.modifiedTime)}</span>
-                              </div>
-                            </td>
-
-                            <td className="max-w-[280px] px-4 py-3.5">
-                              {file.coreTopic ? (
-                                <div>
-                                  <div className="text-xs font-semibold text-slate-900">
-                                    {file.coreTopic}
-                                  </div>
-                                  <p
-                                    className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-slate-600"
-                                    title={file.summary}
-                                  >
-                                    {file.summary}
-                                  </p>
+                          <div key={file.id} className="space-y-3 px-4 py-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex min-w-0 flex-1 items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Select ${file.name}`}
+                                  checked={Boolean(file.selected)}
+                                  onChange={() => toggleSelectFile(file.id)}
+                                  className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                                />
+                                <div className="min-w-0 flex-1">
                                   <button
                                     type="button"
                                     onClick={() => setInspectedFileId(file.id)}
-                                    className="mt-1 text-xs font-medium text-blue-600 hover:underline"
+                                    className="block w-full break-words text-left text-sm font-semibold text-slate-900 hover:text-blue-600"
                                   >
-                                    Inspect snippet
+                                    {file.name}
                                   </button>
+                                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
+                                    <span>{friendlyMimeLabel(file.mimeType)}</span>
+                                    <span aria-hidden="true">·</span>
+                                    <span>{formatBytes(file.size)}</span>
+                                    <span aria-hidden="true">·</span>
+                                    <span>{formatShortDate(file.modifiedTime)}</span>
+                                  </div>
                                 </div>
-                              ) : (
-                                <span className="text-xs text-slate-400">
-                                  Run analysis to extract core topic
-                                </span>
-                              )}
-                            </td>
+                              </div>
 
-                            <td className="min-w-[250px] px-4 py-3.5">
-                              {file.status === 'ready' || file.status === 'renamed' ? (
+                              <div className="shrink-0 pt-0.5">
+                                {file.status === 'unscanned' && (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500">
+                                    <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Unscanned</span>
+                                  </span>
+                                )}
+                                {file.status === 'analyzing' && (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600">
+                                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                                    <span>Analyzing</span>
+                                  </span>
+                                )}
+                                {file.status === 'ready' && (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700">
+                                    <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>{hasProposedChange ? 'Ready' : 'No Change'}</span>
+                                  </span>
+                                )}
+                                {file.status === 'renaming' && (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-600">
+                                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                                    <span>Renaming</span>
+                                  </span>
+                                )}
+                                {file.status === 'renamed' && (
+                                  <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
+                                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Renamed</span>
+                                  </span>
+                                )}
+                                {file.status === 'error' && (
+                                  <span
+                                    className="inline-flex items-center gap-1 text-xs font-medium text-red-700"
+                                    title={file.errorMessage}
+                                  >
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Error</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {file.coreTopic && (
+                              <div className="pl-7">
+                                <div className="text-xs font-semibold text-slate-900">
+                                  {file.coreTopic}
+                                </div>
+                                <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-slate-600">
+                                  {file.summary}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => setInspectedFileId(file.id)}
+                                  className="mt-1 text-xs font-medium text-blue-600 hover:underline"
+                                >
+                                  Inspect snippet
+                                </button>
+                              </div>
+                            )}
+
+                            {(file.status === 'ready' || file.status === 'renamed') && (
+                              <div className="pl-7">
+                                <label
+                                  htmlFor={`mobile-proposed-${file.id}`}
+                                  className="block text-xs font-medium text-slate-500"
+                                >
+                                  Proposed Filename
+                                </label>
                                 <input
+                                  id={`mobile-proposed-${file.id}`}
                                   type="text"
-                                  aria-label={`Proposed filename for ${file.name}`}
                                   value={proposedValue}
                                   onChange={(e) => updateEditedName(file.id, e.target.value)}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
+                                  className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
                                 />
-                              ) : (
-                                <span className="text-xs text-slate-400">—</span>
-                              )}
-                            </td>
+                              </div>
+                            )}
 
-                            <td className="whitespace-nowrap px-4 py-4">
-                              {file.status === 'unscanned' && (
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
-                                  <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                                  <span>Unscanned</span>
-                                </span>
-                              )}
-                              {file.status === 'analyzing' && (
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600">
-                                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
-                                  <span>Analyzing</span>
-                                </span>
-                              )}
-                              {file.status === 'ready' && (
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700">
-                                  <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                                  <span>{hasProposedChange ? 'Ready' : 'No Change'}</span>
-                                </span>
-                              )}
-                              {file.status === 'renaming' && (
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600">
-                                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
-                                  <span>Renaming</span>
-                                </span>
-                              )}
-                              {file.status === 'renamed' && (
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
-                                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                                  <span>Renamed</span>
-                                </span>
-                              )}
-                              {file.status === 'error' && (
-                                <span
-                                  className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700"
-                                  title={file.errorMessage}
-                                >
-                                  <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                                  <span>Error</span>
-                                </span>
-                              )}
-                            </td>
-
-                            <td className="whitespace-nowrap px-6 py-3.5 text-right">
-                              <div className="inline-flex items-center gap-2">
+                            <div className="flex items-center justify-between gap-2 pl-7">
+                              <div className="flex items-center gap-2">
                                 {file.status === 'unscanned' || file.status === 'error' ? (
                                   <button
                                     type="button"
                                     disabled={isAnalyzingBatch}
                                     onClick={() => void handleAnalyzeFiles([file])}
-                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-3.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                                   >
                                     Analyze
                                   </button>
@@ -1396,40 +1438,235 @@ export default function App() {
                                     type="button"
                                     disabled={isExecutingRename}
                                     onClick={() => requestSingleRename(file)}
-                                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    className="inline-flex h-10 items-center rounded-md bg-blue-600 px-3.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                                   >
-                                    Rename
+                                    Rename File
                                   </button>
                                 ) : (
                                   <button
                                     type="button"
                                     disabled={isAnalyzingBatch}
                                     onClick={() => void handleAnalyzeFiles([file])}
-                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-3.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                                   >
                                     Re-analyze
                                   </button>
                                 )}
-
-                                {file.webViewLink && (
-                                  <a
-                                    href={file.webViewLink}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    aria-label={`Open ${file.name} in Google Drive`}
-                                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                  >
-                                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                                  </a>
-                                )}
                               </div>
-                            </td>
-                          </tr>
+
+                              {file.webViewLink && (
+                                <a
+                                  href={file.webViewLink}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex h-10 items-center gap-1 px-2 text-xs font-medium text-slate-600 hover:text-slate-900"
+                                >
+                                  <span>Drive</span>
+                                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                                </a>
+                              )}
+                            </div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
-                </div>
+                    </div>
+                  </div>
+
+                  {/* Desktop High-Density File Table */}
+                  <div className="hidden overflow-x-auto lg:block">
+                    <table className="w-full border-collapse text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
+                          <th className="w-10 px-6 py-3">
+                            <input
+                              type="checkbox"
+                              aria-label="Select all visible files"
+                              checked={allVisibleSelected}
+                              onChange={toggleSelectAllVisible}
+                              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                            />
+                          </th>
+                          <th className="px-4 py-3">Original File</th>
+                          <th className="px-4 py-3">Core Topic &amp; Summary</th>
+                          <th className="px-4 py-3">Proposed Filename</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-6 py-3 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {filteredFiles.map((file) => {
+                          const proposedValue = file.editedName ?? file.proposedName ?? '';
+                          const hasProposedChange =
+                            (file.status === 'ready' || file.status === 'renamed') &&
+                            proposedValue.trim().length > 0 &&
+                            proposedValue.trim() !== file.name;
+
+                          return (
+                            <tr key={file.id} className="align-top hover:bg-slate-50/70">
+                              <td className="px-6 py-4">
+                                <input
+                                  type="checkbox"
+                                  aria-label={`Select ${file.name}`}
+                                  checked={Boolean(file.selected)}
+                                  onChange={() => toggleSelectFile(file.id)}
+                                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                                />
+                              </td>
+
+                              <td className="max-w-[240px] px-4 py-3.5">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setInspectedFileId(file.id)}
+                                    className="truncate text-left font-medium text-slate-900 hover:text-blue-600 hover:underline"
+                                    title={file.name}
+                                  >
+                                    {file.name}
+                                  </button>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
+                                  <span>{friendlyMimeLabel(file.mimeType)}</span>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{formatBytes(file.size)}</span>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{formatShortDate(file.modifiedTime)}</span>
+                                </div>
+                              </td>
+
+                              <td className="max-w-[280px] px-4 py-3.5">
+                                {file.coreTopic ? (
+                                  <div>
+                                    <div className="text-xs font-semibold text-slate-900">
+                                      {file.coreTopic}
+                                    </div>
+                                    <p
+                                      className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-slate-600"
+                                      title={file.summary}
+                                    >
+                                      {file.summary}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() => setInspectedFileId(file.id)}
+                                      className="mt-1 text-xs font-medium text-blue-600 hover:underline"
+                                    >
+                                      Inspect snippet
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-slate-400">
+                                    Run analysis to extract core topic
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="min-w-[250px] px-4 py-3.5">
+                                {file.status === 'ready' || file.status === 'renamed' ? (
+                                  <input
+                                    type="text"
+                                    aria-label={`Proposed filename for ${file.name}`}
+                                    value={proposedValue}
+                                    onChange={(e) => updateEditedName(file.id, e.target.value)}
+                                    className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
+                                  />
+                                ) : (
+                                  <span className="text-xs text-slate-400">—</span>
+                                )}
+                              </td>
+
+                              <td className="whitespace-nowrap px-4 py-4">
+                                {file.status === 'unscanned' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                                    <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Unscanned</span>
+                                  </span>
+                                )}
+                                {file.status === 'analyzing' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600">
+                                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                                    <span>Analyzing</span>
+                                  </span>
+                                )}
+                                {file.status === 'ready' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700">
+                                    <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>{hasProposedChange ? 'Ready' : 'No Change'}</span>
+                                  </span>
+                                )}
+                                {file.status === 'renaming' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600">
+                                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+                                    <span>Renaming</span>
+                                  </span>
+                                )}
+                                {file.status === 'renamed' && (
+                                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+                                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Renamed</span>
+                                  </span>
+                                )}
+                                {file.status === 'error' && (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700"
+                                    title={file.errorMessage}
+                                  >
+                                    <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>Error</span>
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="whitespace-nowrap px-6 py-3.5 text-right">
+                                <div className="inline-flex items-center gap-2">
+                                  {file.status === 'unscanned' || file.status === 'error' ? (
+                                    <button
+                                      type="button"
+                                      disabled={isAnalyzingBatch}
+                                      onClick={() => void handleAnalyzeFiles([file])}
+                                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    >
+                                      Analyze
+                                    </button>
+                                  ) : hasProposedChange ? (
+                                    <button
+                                      type="button"
+                                      disabled={isExecutingRename}
+                                      onClick={() => requestSingleRename(file)}
+                                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    >
+                                      Rename
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={isAnalyzingBatch}
+                                      onClick={() => void handleAnalyzeFiles([file])}
+                                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                    >
+                                      Re-analyze
+                                    </button>
+                                  )}
+
+                                  {file.webViewLink && (
+                                    <a
+                                      href={file.webViewLink}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      aria-label={`Open ${file.name} in Google Drive`}
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                    >
+                                      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </a>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </section>
           </div>
