@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { User } from 'firebase/auth';
 import {
   AlertCircle,
   Check,
@@ -17,6 +16,7 @@ import {
   Upload,
 } from 'lucide-react';
 import {
+  type AuthUser,
   getAccessToken,
   googleSignIn,
   initAuth,
@@ -88,9 +88,10 @@ function reformatNameLocally(
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const lastLoadedTokenRef = useRef<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'workspace' | 'audit' | 'guide'>('workspace');
   const [files, setFiles] = useState<DriveFileItem[]>([]);
@@ -220,9 +221,13 @@ export default function App() {
       (authedUser, token) => {
         setUser(authedUser);
         setNeedsAuth(false);
-        void loadDriveFiles(token);
+        if (lastLoadedTokenRef.current !== token) {
+          lastLoadedTokenRef.current = token;
+          void loadDriveFiles(token);
+        }
       },
       () => {
+        lastLoadedTokenRef.current = null;
         setNeedsAuth(true);
       }
     );
@@ -243,6 +248,7 @@ export default function App() {
       }
       setUser(result.user);
       setNeedsAuth(false);
+      lastLoadedTokenRef.current = result.accessToken;
       await loadDriveFiles(result.accessToken);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
@@ -253,6 +259,7 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    lastLoadedTokenRef.current = null;
     await logout();
     setUser(null);
     setFiles([]);
