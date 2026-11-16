@@ -1,10 +1,12 @@
 import React from 'react';
 import { ExternalLink, FileText, X } from 'lucide-react';
-import type { DriveFileItem } from '../types';
+import type { DriveFileItem, NamingStyle } from '../types';
 import { ConfidenceBadge } from './ConfidenceBadge';
+import { ProposedFilenameInput } from './ProposedFilenameInput';
 
 interface SnippetDrawerProps {
   file: DriveFileItem | null;
+  namingStyle: NamingStyle;
   onClose: () => void;
   onUpdateProposedName: (fileId: string, nextName: string) => void;
   onRequestRename: (file: DriveFileItem) => void;
@@ -12,6 +14,7 @@ interface SnippetDrawerProps {
 
 export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   file,
+  namingStyle,
   onClose,
   onUpdateProposedName,
   onRequestRename,
@@ -67,6 +70,11 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
             </div>
             <p className="mt-1.5 text-sm font-medium text-slate-900">
               {file.coreTopic || 'Not analyzed yet'}
+              {file.category ? (
+                <span className="ml-2 font-normal text-xs text-slate-500">
+                  · {file.category}
+                </span>
+              ) : null}
             </p>
             {file.keywords && file.keywords.length > 0 && (
               <p className="mt-1 break-words text-xs text-slate-500">
@@ -89,11 +97,14 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
             >
               Proposed Filename
             </label>
-            <input
+            <ProposedFilenameInput
               id="drawer-proposed-name"
-              type="text"
+              ariaLabel={`Proposed filename for ${file.name}`}
               value={activeName}
-              onChange={(e) => onUpdateProposedName(file.id, e.target.value)}
+              originalName={file.name}
+              mimeType={file.mimeType}
+              namingStyle={namingStyle}
+              onChange={(next) => onUpdateProposedName(file.id, next)}
               className="mt-2 h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-blue-600 focus:outline-none sm:h-10"
             />
           </div>

@@ -1,11 +1,13 @@
 import React from 'react';
 import { Check, Sparkles, X } from 'lucide-react';
-import type { DriveFileItem } from '../types';
+import type { DriveFileItem, NamingStyle } from '../types';
+import { formatFilenamePreview } from '../lib/naming';
 import { ConfidenceBadge, resolveConfidenceScore } from './ConfidenceBadge';
 
 interface SelectionOverviewCardProps {
   selectedFiles: DriveFileItem[];
   totalFilesCount: number;
+  namingStyle?: NamingStyle;
   isAnalyzing: boolean;
   isExecutingRename: boolean;
   onAnalyzeSelected: () => void;
@@ -16,6 +18,7 @@ interface SelectionOverviewCardProps {
 export const SelectionOverviewCard: React.FC<SelectionOverviewCardProps> = ({
   selectedFiles,
   totalFilesCount,
+  namingStyle = 'title-case',
   isAnalyzing,
   isExecutingRename,
   onAnalyzeSelected,
@@ -35,8 +38,10 @@ export const SelectionOverviewCard: React.FC<SelectionOverviewCardProps> = ({
 
   const flaggedForRenameCount = selectedFiles.filter((f) => {
     if (f.status !== 'ready' && f.status !== 'renamed') return false;
-    const target = (f.editedName ?? f.proposedName ?? '').trim();
-    return target.length > 0 && target !== f.name;
+    const rawTarget = (f.editedName ?? f.proposedName ?? '').trim();
+    if (!rawTarget) return false;
+    const formatted = formatFilenamePreview(rawTarget, f.name, f.mimeType, namingStyle);
+    return formatted.length > 0 && formatted !== f.name;
   }).length;
 
   const unscannedCount = selectedFiles.filter(

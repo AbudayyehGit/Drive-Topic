@@ -13,6 +13,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
 const DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
+const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
 const SUPPORTED_MIME_TYPES = [
   'application/vnd.google-apps.document',
   'text/plain',
@@ -128,6 +130,7 @@ async function analyzeSnippetWithGemini(
   namingStyle: 'title-case' | 'kebab-case' | 'snake_case'
 ): Promise<{
   coreTopic: string;
+  category: string;
   summary: string;
   proposedName: string;
   confidence: 'high' | 'medium' | 'low';
@@ -137,6 +140,7 @@ async function analyzeSnippetWithGemini(
   if (!snippet || snippet.length < 10) {
     return {
       coreTopic: 'Empty Document',
+      category: 'Uncategorized',
       summary: 'This file contains little or no extractable text content.',
       proposedName: originalName,
       confidence: 'low',
@@ -147,7 +151,7 @@ async function analyzeSnippetWithGemini(
 
   const prompt = [
     `Analyze the following document snippet from a file currently named "${originalName}".`,
-    `Determine its core topic, write a concise 1-2 sentence factual summary, extract 3-4 topic keywords, rate your topic extraction certainty from 0 to 100 (confidenceScore), and propose a clean, descriptive document title (4 to 7 words, no file extension, no dates unless central to the document).`,
+    `Determine its specific core topic (2-4 words), assign a high-level category (1-2 words, e.g. Engineering, Finance, Product, Operations, Research, Legal, Marketing, Culinary, Personal), write a concise 1-2 sentence factual summary, extract 3-4 topic keywords, rate your topic extraction certainty from 0 to 100 (confidenceScore), and propose a clean, descriptive document title (4 to 7 words, no file extension, no dates unless central to the document).`,
     '',
     'Document Snippet:',
     '---',
@@ -160,7 +164,7 @@ async function analyzeSnippetWithGemini(
     contents: prompt,
     config: {
       systemInstruction:
-        'You are a precision document archivist. Extract the core topic and produce a clear, descriptive filename title from the document content. Avoid vague words like Notes, Document, File, or Draft unless genuinely essential.',
+        'You are a precision document archivist. Extract the core topic, assign a clean high-level category, and produce a clear, descriptive filename title from the document content. Avoid vague words like Notes, Document, File, or Draft unless genuinely essential.',
       responseMimeType: 'application/json',
       responseSchema: {
         type: Type.OBJECT,
@@ -168,6 +172,10 @@ async function analyzeSnippetWithGemini(
           coreTopic: {
             type: Type.STRING,
             description: 'Short 2-4 word core topic label.',
+          },
+          category: {
+            type: Type.STRING,
+            description: 'High-level 1-2 word category label for grouping related documents (e.g., Engineering, Finance, Product, Operations, Research, Legal, Marketing, Culinary, Personal).',
           },
           summary: {
             type: Type.STRING,
@@ -191,7 +199,7 @@ async function analyzeSnippetWithGemini(
             description: '3 to 4 concise topic keywords.',
           },
         },
-        required: ['coreTopic', 'summary', 'proposedTitle', 'confidence', 'confidenceScore', 'keywords'],
+        required: ['coreTopic', 'category', 'summary', 'proposedTitle', 'confidence', 'confidenceScore', 'keywords'],
       },
     },
   });
@@ -199,6 +207,7 @@ async function analyzeSnippetWithGemini(
   const rawText = (response.text ?? '{}').trim();
   const parsed = JSON.parse(rawText) as {
     coreTopic?: string;
+    category?: string;
     summary?: string;
     proposedTitle?: string;
     confidence?: string;
@@ -230,8 +239,12 @@ async function analyzeSnippetWithGemini(
     namingStyle
   );
 
+  const coreTopic = (parsed.coreTopic || 'General Topic').trim();
+  const category = (parsed.category || coreTopic).trim();
+
   return {
-    coreTopic: (parsed.coreTopic || 'General Topic').trim(),
+    coreTopic,
+    category,
     summary: (parsed.summary || 'Summary unavailable.').trim(),
     proposedName,
     confidence: confidenceNormalized,
@@ -242,7 +255,7 @@ async function analyzeSnippetWithGemini(
 
 async function createMultipartDriveFile(
   accessToken: string,
-  metadata: { name: string; mimeType: string },
+  metadata: { name: string; mimeType: string; parents?: string[] },
   content: string,
   sourceMimeType = 'text/plain'
 ) {
@@ -257,7 +270,7 @@ async function createMultipartDriveFile(
     `--${boundary}--`;
 
   const response = await fetch(
-    `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,modifiedTime,size,webViewLink`,
+    `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,modifiedTime,size,webViewLink,parents`,
     {
       method: 'POST',
       headers: {
@@ -274,6 +287,81 @@ async function createMultipartDriveFile(
   }
 
   return response.json();
+}
+
+async function createDriveFolder(
+  accessToken: string,
+  name: string,
+  parentId?: string
+): Promise<{
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  parents?: string[];
+}> {
+  const payload: { name: string; mimeType: string; parents?: string[] } = {
+    name,
+    mimeType: FOLDER_MIME_TYPE,
+  };
+  if (parentId && /^[a-zA-Z0-9_-]+$/.test(parentId)) {
+    payload.parents = [parentId];
+  }
+
+  const response = await fetch(
+    `${DRIVE_API_BASE}/files?fields=id,name,mimeType,modifiedTime,webViewLink,parents`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Drive folder creation failed (${response.status}): ${errText}`);
+  }
+
+  return response.json();
+}
+
+async function resolveFolderBreadcrumbs(
+  accessToken: string,
+  folderId: string
+): Promise<Array<{ id: string; name: string }>> {
+  const trail: Array<{ id: string; name: string }> = [];
+  let cursor: string | undefined = folderId;
+  const visited = new Set<string>();
+
+  for (let depth = 0; depth < 6 && cursor; depth += 1) {
+    if (visited.has(cursor) || !/^[a-zA-Z0-9_-]+$/.test(cursor)) break;
+    visited.add(cursor);
+
+    const res = await fetch(
+      `${DRIVE_API_BASE}/files/${encodeURIComponent(cursor)}?fields=id,name,mimeType,parents`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+
+    if (!res.ok) break;
+    const item = (await res.json()) as {
+      id?: string;
+      name?: string;
+      mimeType?: string;
+      parents?: string[];
+    };
+
+    if (!item.id || !item.name) break;
+    trail.unshift({ id: item.id, name: item.name });
+    cursor = Array.isArray(item.parents) && item.parents.length > 0 ? item.parents[0] : undefined;
+  }
+
+  return trail;
 }
 
 const SAMPLE_DRIVE_FILES = [
@@ -342,7 +430,7 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // List text & Google Doc files accessible via Google Drive API
+  // List folders, subfolders, and text/Google Doc files accessible via Google Drive API
   app.get('/api/drive/files', async (req: Request, res: Response) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -350,21 +438,33 @@ async function startServer() {
       return;
     }
 
+    const rawFolderId = typeof req.query.folderId === 'string' ? req.query.folderId.trim() : '';
+    if (rawFolderId && !/^[a-zA-Z0-9_-]+$/.test(rawFolderId)) {
+      res.status(400).json({ error: 'Invalid folderId parameter.' });
+      return;
+    }
+
     try {
-      const mimeQuery = SUPPORTED_MIME_TYPES.map((m) => `mimeType='${m}'`).join(' or ');
-      const q = `trashed = false and (${mimeQuery})`;
+      const mimeQuery = [FOLDER_MIME_TYPE, ...SUPPORTED_MIME_TYPES]
+        .map((m) => `mimeType='${m}'`)
+        .join(' or ');
+      const parentClause = rawFolderId ? ` and '${rawFolderId}' in parents` : '';
+      const q = `trashed = false${parentClause} and (${mimeQuery})`;
       const params = new URLSearchParams({
         q,
-        fields: 'files(id,name,mimeType,modifiedTime,size,webViewLink)',
-        orderBy: 'modifiedTime desc',
-        pageSize: '50',
+        fields: 'files(id,name,mimeType,modifiedTime,size,webViewLink,parents)',
+        orderBy: 'folder,modifiedTime desc',
+        pageSize: '100',
       });
 
-      const driveRes = await fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const [driveRes, breadcrumbs] = await Promise.all([
+        fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }),
+        rawFolderId ? resolveFolderBreadcrumbs(token, rawFolderId) : Promise.resolve([]),
+      ]);
 
       const data = (await driveRes.json()) as {
         files?: Array<{
@@ -374,6 +474,7 @@ async function startServer() {
           modifiedTime?: string;
           size?: string;
           webViewLink?: string;
+          parents?: string[];
         }>;
         error?: { message?: string; code?: number };
       };
@@ -385,9 +486,33 @@ async function startServer() {
         return;
       }
 
-      res.json({ files: data.files || [] });
+      res.json({ files: data.files || [], breadcrumbs });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to communicate with Google Drive.';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Create a Google Drive folder or subfolder
+  app.post('/api/drive/folders', async (req: Request, res: Response) => {
+    const token = extractBearerToken(req);
+    if (!token) {
+      res.status(401).json({ error: 'Missing Google Drive access token.' });
+      return;
+    }
+
+    const { name, parentId } = req.body as { name?: string; parentId?: string };
+    const cleanName = typeof name === 'string' ? sanitizeFilenameStem(name) : '';
+    if (!cleanName) {
+      res.status(400).json({ error: 'Folder name is required.' });
+      return;
+    }
+
+    try {
+      const folder = await createDriveFolder(token, cleanName, parentId);
+      res.json({ folder });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create Google Drive folder.';
       res.status(500).json({ error: message });
     }
   });
@@ -512,7 +637,7 @@ async function startServer() {
     }
   });
 
-  // Seed realistic messy-named files into the user's Google Drive (works seamlessly with drive.file scope)
+  // Seed realistic messy-named files + folder/subfolder structure in the user's Google Drive
   app.post('/api/drive/seed', async (req: Request, res: Response) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -522,23 +647,38 @@ async function startServer() {
 
     try {
       const created = [];
-      for (const sample of SAMPLE_DRIVE_FILES) {
+      const archiveFolder = await createDriveFolder(token, 'DriveTopic Sample Workspace');
+      const engineeringSubfolder = await createDriveFolder(
+        token,
+        'Platform & Engineering',
+        archiveFolder.id
+      );
+
+      for (let i = 0; i < SAMPLE_DRIVE_FILES.length; i += 1) {
+        const sample = SAMPLE_DRIVE_FILES[i];
+        const parents =
+          i === 0
+            ? [engineeringSubfolder.id]
+            : i === 1
+              ? [archiveFolder.id]
+              : undefined;
+
         const file = await createMultipartDriveFile(
           token,
-          { name: sample.name, mimeType: sample.mimeType },
+          { name: sample.name, mimeType: sample.mimeType, ...(parents ? { parents } : {}) },
           sample.content,
           sample.sourceMimeType
         );
         created.push(file);
       }
-      res.json({ files: created });
+      res.json({ files: created, folders: [archiveFolder, engineeringSubfolder] });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create sample Drive files.';
       res.status(500).json({ error: message });
     }
   });
 
-  // Upload a local text/markdown/csv file directly to Google Drive
+  // Upload a local text/markdown/csv file directly to Google Drive (supports current subfolder parentId)
   app.post('/api/drive/upload', async (req: Request, res: Response) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -546,11 +686,12 @@ async function startServer() {
       return;
     }
 
-    const { name, content, mimeType, convertToGoogleDoc } = req.body as {
+    const { name, content, mimeType, convertToGoogleDoc, parentId } = req.body as {
       name?: string;
       content?: string;
       mimeType?: string;
       convertToGoogleDoc?: boolean;
+      parentId?: string;
     };
 
     if (!name || typeof content !== 'string') {
@@ -561,9 +702,14 @@ async function startServer() {
     try {
       const sourceMime = mimeType && mimeType.startsWith('text/') ? mimeType : 'text/plain';
       const targetMime = convertToGoogleDoc ? 'application/vnd.google-apps.document' : sourceMime;
+      const parents = parentId && /^[a-zA-Z0-9_-]+$/.test(parentId) ? [parentId] : undefined;
       const file = await createMultipartDriveFile(
         token,
-        { name: sanitizeFilenameStem(name) || 'uploaded_note.txt', mimeType: targetMime },
+        {
+          name: sanitizeFilenameStem(name) || 'uploaded_note.txt',
+          mimeType: targetMime,
+          ...(parents ? { parents } : {}),
+        },
         content,
         sourceMime
       );

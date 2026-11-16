@@ -412,7 +412,13 @@ export const logout = async (): Promise<void> => {
   }
 };
 
-// Optional Google Picker loader for selecting existing Drive files under drive.file scope
+// Optional Google Picker loader for selecting existing Drive files and folders under drive.file scope
+export interface PickedDriveDoc {
+  id: string;
+  name: string;
+  mimeType: string;
+}
+
 interface PickerGlobal {
   gapi?: {
     load: (api: string, callback: () => void) => void;
@@ -421,6 +427,7 @@ interface PickerGlobal {
     picker?: {
       PickerBuilder: new () => {
         addView: (view: unknown) => unknown;
+        enableFeature?: (feature: unknown) => unknown;
         setOAuthToken: (token: string) => unknown;
         setCallback: (
           cb: (data: {
@@ -434,9 +441,13 @@ interface PickerGlobal {
       };
       DocsView: new (viewId?: unknown) => {
         setIncludeFolders: (include: boolean) => unknown;
+        setSelectFolderEnabled?: (enabled: boolean) => unknown;
+        setMode?: (mode: unknown) => unknown;
         setMimeTypes: (mimeTypes: string) => unknown;
       };
+      DocsViewMode?: { LIST?: unknown; GRID?: unknown };
       ViewId: { DOCS: unknown };
+      Feature?: { MULTISELECT_ENABLED?: unknown };
       Action: { PICKED: string; CANCEL: string };
     };
   };
@@ -469,7 +480,9 @@ function loadGapiScript(): Promise<void> {
   return gapiScriptPromise;
 }
 
-export async function openGoogleDrivePicker(accessToken: string): Promise<boolean> {
+export async function openGoogleDrivePicker(
+  accessToken: string
+): Promise<{ picked: boolean; docs: PickedDriveDoc[] }> {
   await loadGapiScript();
   const win = window as unknown as PickerGlobal;
   if (!win.google?.picker) {
@@ -484,12 +497,22 @@ export async function openGoogleDrivePicker(accessToken: string): Promise<boolea
   return new Promise((resolve) => {
     const pickerApi = win.google!.picker!;
     const docsView = new pickerApi.DocsView(pickerApi.ViewId.DOCS);
+    if (pickerApi.DocsViewMode?.LIST && typeof docsView.setMode === 'function') {
+      docsView.setMode(pickerApi.DocsViewMode.LIST);
+    }
+    docsView.setIncludeFolders(true);
+    if (typeof docsView.setSelectFolderEnabled === 'function') {
+      docsView.setSelectFolderEnabled(true);
+    }
     docsView.setMimeTypes(
-      'application/vnd.google-apps.document,text/plain,text/markdown,text/csv,application/json,text/html'
+      'application/vnd.google-apps.folder,application/vnd.google-apps.document,text/plain,text/markdown,text/csv,application/json,text/html'
     );
 
     const builder = new pickerApi.PickerBuilder();
     builder.addView(docsView);
+    if (pickerApi.Feature?.MULTISELECT_ENABLED && typeof builder.enableFeature === 'function') {
+      builder.enableFeature(pickerApi.Feature.MULTISELECT_ENABLED);
+    }
     builder.setOAuthToken(accessToken);
     if (firebaseConfig.messagingSenderId) {
       builder.setAppId(firebaseConfig.messagingSenderId);
@@ -497,9 +520,9 @@ export async function openGoogleDrivePicker(accessToken: string): Promise<boolea
     builder.setOrigin(pickerOrigin);
     builder.setCallback((data) => {
       if (data.action === pickerApi.Action.PICKED) {
-        resolve(true);
+        resolve({ picked: true, docs: data.docs || [] });
       } else if (data.action === pickerApi.Action.CANCEL) {
-        resolve(false);
+        resolve({ picked: false, docs: [] });
       }
     });
 

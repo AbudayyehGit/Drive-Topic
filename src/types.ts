@@ -1,3 +1,5 @@
+export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
 export type NamingStyle = 'title-case' | 'kebab-case' | 'snake_case';
 
 export type FileRowStatus =
@@ -10,6 +12,11 @@ export type FileRowStatus =
 
 export type AnalysisConfidence = 'high' | 'medium' | 'low';
 
+export interface DriveBreadcrumb {
+  id: string;
+  name: string;
+}
+
 export interface DriveFileItem {
   id: string;
   name: string;
@@ -17,9 +24,11 @@ export interface DriveFileItem {
   modifiedTime?: string;
   size?: string;
   webViewLink?: string;
+  parents?: string[];
   status: FileRowStatus;
   snippet?: string;
   coreTopic?: string;
+  category?: string;
   summary?: string;
   keywords?: string[];
   confidence?: AnalysisConfidence;
@@ -34,6 +43,7 @@ export interface AnalyzeResponseItem {
   fileId: string;
   snippet: string;
   coreTopic: string;
+  category?: string;
   summary: string;
   proposedName: string;
   confidence: AnalysisConfidence;

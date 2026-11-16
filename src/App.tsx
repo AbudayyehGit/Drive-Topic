@@ -3,11 +3,16 @@ import {
   AlertCircle,
   Check,
   CheckCircle2,
+  ChevronRight,
   Clock,
   ExternalLink,
   FilePlus2,
   FileText,
+  Folder,
   FolderOpen,
+  FolderPlus,
+  Home,
+  Layers,
   Loader2,
   LogOut,
   RefreshCw,
@@ -23,21 +28,53 @@ import {
   logout,
   openGoogleDrivePicker,
 } from './lib/auth';
-import type {
-  AnalyzeResponseItem,
-  DriveFileItem,
-  NamingStyle,
-  RenameAuditEntry,
-  RenameTarget,
+import {
+  type AnalyzeResponseItem,
+  type DriveBreadcrumb,
+  type DriveFileItem,
+  FOLDER_MIME_TYPE,
+  type NamingStyle,
+  type RenameAuditEntry,
+  type RenameTarget,
 } from './types';
+import { formatFilenamePreview } from './lib/naming';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { RenameConfirmModal } from './components/RenameConfirmModal';
 import { SnippetDrawer } from './components/SnippetDrawer';
 import { AuditLogPanel } from './components/AuditLogPanel';
 import { ConfidenceBadge } from './components/ConfidenceBadge';
 import { SelectionOverviewCard } from './components/SelectionOverviewCard';
+import { TopicSummaryChart } from './components/TopicSummaryChart';
+import { TriStateCheckbox } from './components/TriStateCheckbox';
+import { ProposedFilenameInput } from './components/ProposedFilenameInput';
 
 const AUDIT_STORAGE_KEY = 'drivetopic_audit_log_v1';
+const SELECTED_IDS_STORAGE_KEY = 'drivetopic_selected_ids_v1';
+
+function loadPersistedSelectedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SELECTED_IDS_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((id): id is string => typeof id === 'string'))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function savePersistedSelectedIds(ids: Set<string>): void {
+  try {
+    localStorage.setItem(SELECTED_IDS_STORAGE_KEY, JSON.stringify(Array.from(ids)));
+  } catch {
+    // Ignore storage quota issues
+  }
+}
+
+function isFolderItem(item: { mimeType: string }): boolean {
+  return item.mimeType === FOLDER_MIME_TYPE;
+}
 
 function formatBytes(sizeStr?: string): string {
   if (!sizeStr) return 'Google Doc';
@@ -56,37 +93,13 @@ function formatShortDate(iso?: string): string {
 }
 
 function friendlyMimeLabel(mimeType: string): string {
+  if (mimeType === FOLDER_MIME_TYPE) return 'Folder';
   if (mimeType === 'application/vnd.google-apps.document') return 'Google Doc';
   if (mimeType === 'text/markdown' || mimeType === 'text/x-markdown') return 'Markdown';
   if (mimeType === 'text/csv') return 'CSV';
   if (mimeType === 'application/json') return 'JSON';
   if (mimeType === 'text/html') return 'HTML';
   return 'Plain Text';
-}
-
-function reformatNameLocally(
-  currentName: string,
-  originalName: string,
-  mimeType: string,
-  style: NamingStyle
-): string {
-  const isGoogleDoc = mimeType === 'application/vnd.google-apps.document';
-  const extMatch = !isGoogleDoc ? originalName.match(/(\.[a-zA-Z0-9]{1,8})$/) : null;
-  const extension = extMatch ? extMatch[1].toLowerCase() : '';
-  const stemRaw = currentName.replace(/\.[a-zA-Z0-9]{1,8}$/, '').trim();
-  const words = stemRaw.split(/[\s_-]+/).filter(Boolean);
-  if (words.length === 0) return currentName;
-
-  if (style === 'kebab-case') {
-    return `${words.map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean).join('-')}${extension}`;
-  }
-  if (style === 'snake_case') {
-    return `${words.map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean).join('_')}${extension}`;
-  }
-  const titled = words
-    .map((w) => (/^[A-Z0-9]{2,5}$/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
-    .join(' ');
-  return `${titled}${extension}`;
 }
 
 export default function App() {
@@ -97,10 +110,19 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<'workspace' | 'audit' | 'guide'>('workspace');
   const [files, setFiles] = useState<DriveFileItem[]>([]);
+  const [knownFilesById, setKnownFilesById] = useState<Record<string, DriveFileItem>>({});
+  const [viewMode, setViewMode] = useState<'folders' | 'all'>('all');
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [breadcrumbs, setBreadcrumbs] = useState<DriveBreadcrumb[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [showNewFolderBar, setShowNewFolderBar] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
 
   const [namingStyle, setNamingStyle] = useState<NamingStyle>('title-case');
   const [searchQuery, setSearchQuery] = useState('');
@@ -114,6 +136,17 @@ export default function App() {
   const [isExecutingRename, setIsExecutingRename] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const knownFilesRef = useRef<Record<string, DriveFileItem>>({});
+  const currentFolderIdRef = useRef<string | null>(null);
+  const persistedSelectedIdsRef = useRef<Set<string>>(loadPersistedSelectedIds());
+
+  useEffect(() => {
+    knownFilesRef.current = knownFilesById;
+  }, [knownFilesById]);
+
+  useEffect(() => {
+    currentFolderIdRef.current = currentFolderId;
+  }, [currentFolderId]);
 
   const [auditEntries, setAuditEntries] = useState<RenameAuditEntry[]>(() => {
     try {
@@ -153,15 +186,21 @@ export default function App() {
   }, []);
 
   const loadDriveFiles = useCallback(
-    async (explicitToken?: string) => {
+    async (explicitToken?: string, folderIdOverride?: string | null) => {
       const token = explicitToken ?? requireToken();
       if (!token) return;
+
+      const targetFolderId =
+        folderIdOverride !== undefined ? folderIdOverride : currentFolderIdRef.current;
 
       setIsLoadingFiles(true);
       setBannerError(null);
 
       try {
-        const res = await fetch('/api/drive/files', {
+        const endpoint = targetFolderId
+          ? `/api/drive/files?folderId=${encodeURIComponent(targetFolderId)}`
+          : '/api/drive/files';
+        const res = await fetch(endpoint, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = (await res.json()) as {
@@ -172,7 +211,9 @@ export default function App() {
             modifiedTime?: string;
             size?: string;
             webViewLink?: string;
+            parents?: string[];
           }>;
+          breadcrumbs?: DriveBreadcrumb[];
           error?: string;
         };
 
@@ -182,32 +223,51 @@ export default function App() {
         }
 
         const fetched = data.files || [];
-        setFiles((prev) => {
-          const prevMap = new Map(prev.map((item) => [item.id, item]));
-          return fetched.map((f) => {
-            const existing = prevMap.get(f.id);
-            if (existing) {
-              return {
-                ...existing,
-                name: f.name,
-                mimeType: f.mimeType,
-                modifiedTime: f.modifiedTime,
-                size: f.size,
-                webViewLink: f.webViewLink,
-              };
-            }
+        setBreadcrumbs(targetFolderId ? data.breadcrumbs || [] : []);
+
+        const prevCache = knownFilesRef.current;
+        const selectedSet = persistedSelectedIdsRef.current;
+        const mergedItems: DriveFileItem[] = fetched.map((f) => {
+          const existing = prevCache[f.id];
+          const isFolder = isFolderItem(f);
+          const isSelected = isFolder
+            ? false
+            : existing
+              ? Boolean(existing.selected)
+              : selectedSet.has(f.id);
+
+          if (existing) {
             return {
-              id: f.id,
+              ...existing,
               name: f.name,
               mimeType: f.mimeType,
               modifiedTime: f.modifiedTime,
               size: f.size,
               webViewLink: f.webViewLink,
-              status: 'unscanned',
-              selected: true,
+              parents: f.parents,
+              selected: isSelected,
             };
-          });
+          }
+          return {
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+            modifiedTime: f.modifiedTime,
+            size: f.size,
+            webViewLink: f.webViewLink,
+            parents: f.parents,
+            status: 'unscanned',
+            selected: isSelected,
+          };
         });
+
+        const nextKnown = { ...prevCache };
+        for (const item of mergedItems) {
+          nextKnown[item.id] = item;
+        }
+        knownFilesRef.current = nextKnown;
+        setFiles(mergedItems);
+        setKnownFilesById(nextKnown);
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unable to load Google Drive files.';
         setBannerError(msg);
@@ -225,7 +285,7 @@ export default function App() {
         setNeedsAuth(false);
         if (lastLoadedTokenRef.current !== token) {
           lastLoadedTokenRef.current = token;
-          void loadDriveFiles(token);
+          void loadDriveFiles(token, null);
         }
       },
       () => {
@@ -251,7 +311,7 @@ export default function App() {
       setUser(result.user);
       setNeedsAuth(false);
       lastLoadedTokenRef.current = result.accessToken;
-      await loadDriveFiles(result.accessToken);
+      await loadDriveFiles(result.accessToken, null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
       setBannerError(msg);
@@ -265,44 +325,141 @@ export default function App() {
     await logout();
     setUser(null);
     setFiles([]);
+    setKnownFilesById({});
+    setCurrentFolderId(null);
+    setBreadcrumbs([]);
+    setSelectedCategory(null);
     setNeedsAuth(true);
     setBannerNotice('Signed out from Google Drive.');
   };
 
   const handleNamingStyleChange = (nextStyle: NamingStyle) => {
     setNamingStyle(nextStyle);
-    setFiles((prev) =>
-      prev.map((f) => {
-        if (!f.proposedName) return f;
-        const reformatted = reformatNameLocally(
-          f.editedName || f.proposedName,
-          f.name,
-          f.mimeType,
-          nextStyle
-        );
-        return {
-          ...f,
-          proposedName: reformatted,
-          editedName: reformatted,
-        };
-      })
-    );
+    const applyStyle = (f: DriveFileItem): DriveFileItem => {
+      if (isFolderItem(f) || !f.proposedName) return f;
+      const reformatted = formatFilenamePreview(
+        f.editedName || f.proposedName,
+        f.name,
+        f.mimeType,
+        nextStyle
+      );
+      return {
+        ...f,
+        proposedName: reformatted,
+        editedName: reformatted,
+      };
+    };
+    setFiles((prev) => prev.map(applyStyle));
+    setKnownFilesById((prev) => {
+      const next: Record<string, DriveFileItem> = {};
+      for (const [id, item] of Object.entries(prev)) {
+        next[id] = applyStyle(item);
+      }
+      return next;
+    });
+  };
+
+  const openFolder = useCallback(
+    async (folderId: string | null) => {
+      setViewMode('folders');
+      setCurrentFolderId(folderId);
+      currentFolderIdRef.current = folderId;
+      await loadDriveFiles(undefined, folderId);
+    },
+    [loadDriveFiles]
+  );
+
+  const switchViewMode = useCallback(
+    async (mode: 'folders' | 'all') => {
+      setViewMode(mode);
+      if (mode === 'all' && currentFolderIdRef.current !== null) {
+        setCurrentFolderId(null);
+        currentFolderIdRef.current = null;
+        await loadDriveFiles(undefined, null);
+      }
+    },
+    [loadDriveFiles]
+  );
+
+  const handleSelectCategory = useCallback(
+    (category: string | null) => {
+      setSelectedCategory(category);
+      if (category !== null && currentFolderIdRef.current !== null) {
+        setViewMode('all');
+        setCurrentFolderId(null);
+        currentFolderIdRef.current = null;
+        void loadDriveFiles(undefined, null);
+      }
+    },
+    [loadDriveFiles]
+  );
+
+  const handleCreateFolder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = newFolderName.trim();
+    if (!trimmed) return;
+    const token = requireToken();
+    if (!token) return;
+
+    setIsCreatingFolder(true);
+    setBannerError(null);
+    setBannerNotice(null);
+
+    try {
+      const res = await fetch('/api/drive/folders', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: trimmed,
+          parentId: currentFolderId ?? undefined,
+        }),
+      });
+      const data = (await res.json()) as {
+        folder?: { id: string; name: string };
+        error?: string;
+      };
+
+      if (!res.ok || !data.folder) {
+        if (res.status === 401) setNeedsAuth(true);
+        throw new Error(data.error || 'Failed to create Drive folder.');
+      }
+
+      setNewFolderName('');
+      setShowNewFolderBar(false);
+      await loadDriveFiles(token, currentFolderId);
+      setBannerNotice(`Created folder "${data.folder.name}" in Google Drive.`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Folder creation failed.';
+      setBannerError(msg);
+    } finally {
+      setIsCreatingFolder(false);
+    }
   };
 
   const handleAnalyzeFiles = async (targetFiles: DriveFileItem[]) => {
     const token = requireToken();
-    if (!token || targetFiles.length === 0) return;
+    const docTargets = targetFiles.filter((f) => !isFolderItem(f));
+    if (!token || docTargets.length === 0) return;
 
-    const targetIds = new Set(targetFiles.map((f) => f.id));
+    const targetIds = new Set(docTargets.map((f) => f.id));
     setIsAnalyzingBatch(true);
     setBannerError(null);
     setBannerNotice(null);
 
-    setFiles((prev) =>
-      prev.map((f) =>
-        targetIds.has(f.id) ? { ...f, status: 'analyzing', errorMessage: undefined } : f
-      )
-    );
+    const markAnalyzing = (f: DriveFileItem): DriveFileItem =>
+      targetIds.has(f.id) ? { ...f, status: 'analyzing', errorMessage: undefined } : f;
+
+    setFiles((prev) => prev.map(markAnalyzing));
+    setKnownFilesById((prev) => {
+      const next = { ...prev };
+      for (const id of targetIds) {
+        if (next[id]) next[id] = markAnalyzing(next[id]);
+      }
+      return next;
+    });
 
     try {
       const res = await fetch('/api/drive/analyze', {
@@ -313,7 +470,7 @@ export default function App() {
         },
         body: JSON.stringify({
           namingStyle,
-          files: targetFiles.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType })),
+          files: docTargets.map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType })),
         }),
       });
 
@@ -329,46 +486,67 @@ export default function App() {
 
       const analysisMap = new Map((data.analyses || []).map((a) => [a.fileId, a]));
 
-      setFiles((prev) =>
-        prev.map((f) => {
-          const item = analysisMap.get(f.id);
-          if (!item) return f;
-          if (item.error) {
-            return {
-              ...f,
-              status: 'error',
-              errorMessage: item.error,
-            };
-          }
+      const applyAnalysis = (f: DriveFileItem): DriveFileItem => {
+        const item = analysisMap.get(f.id);
+        if (!item) return f;
+        if (item.error) {
           return {
             ...f,
-            status: 'ready',
-            snippet: item.snippet,
-            coreTopic: item.coreTopic,
-            summary: item.summary,
-            keywords: item.keywords,
-            confidence: item.confidence,
-            confidenceScore: item.confidenceScore,
-            proposedName: item.proposedName,
-            editedName: item.proposedName,
-            selected: item.proposedName !== f.name,
+            status: 'error',
+            errorMessage: item.error,
           };
-        })
-      );
+        }
+        const nextSelectedFlag = item.proposedName !== f.name;
+        if (nextSelectedFlag) {
+          persistedSelectedIdsRef.current.add(f.id);
+        } else {
+          persistedSelectedIdsRef.current.delete(f.id);
+        }
+        return {
+          ...f,
+          status: 'ready',
+          snippet: item.snippet,
+          coreTopic: item.coreTopic,
+          category: item.category,
+          summary: item.summary,
+          keywords: item.keywords,
+          confidence: item.confidence,
+          confidenceScore: item.confidenceScore,
+          proposedName: item.proposedName,
+          editedName: item.proposedName,
+          selected: nextSelectedFlag,
+        };
+      };
+
+      setFiles((prev) => prev.map(applyAnalysis));
+      setKnownFilesById((prev) => {
+        const next = { ...prev };
+        for (const id of targetIds) {
+          if (next[id]) next[id] = applyAnalysis(next[id]);
+        }
+        knownFilesRef.current = next;
+        return next;
+      });
+      savePersistedSelectedIds(persistedSelectedIdsRef.current);
 
       setBannerNotice(
-        `Analyzed ${targetFiles.length} ${targetFiles.length === 1 ? 'document' : 'documents'} and generated topic-based filenames.`
+        `Analyzed ${docTargets.length} ${docTargets.length === 1 ? 'document' : 'documents'} and generated topic-based filenames.`
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to analyze file contents.';
       setBannerError(msg);
-      setFiles((prev) =>
-        prev.map((f) =>
-          targetIds.has(f.id) && f.status === 'analyzing'
-            ? { ...f, status: 'error', errorMessage: msg }
-            : f
-        )
-      );
+      const markError = (f: DriveFileItem): DriveFileItem =>
+        targetIds.has(f.id) && f.status === 'analyzing'
+          ? { ...f, status: 'error', errorMessage: msg }
+          : f;
+      setFiles((prev) => prev.map(markError));
+      setKnownFilesById((prev) => {
+        const next = { ...prev };
+        for (const id of targetIds) {
+          if (next[id]) next[id] = markError(next[id]);
+        }
+        return next;
+      });
     } finally {
       setIsAnalyzingBatch(false);
     }
@@ -409,9 +587,9 @@ export default function App() {
         });
       }
 
-      await loadDriveFiles(token);
+      await loadDriveFiles(token, currentFolderId);
       setBannerNotice(
-        `Created ${data.files?.length || 0} sample documents in your Google Drive. Click "Analyze All" to extract their core topics.`
+        `Created ${data.files?.length || 0} sample documents (including nested folders) in your Google Drive.`
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to create sample files.';
@@ -446,6 +624,7 @@ export default function App() {
             name: localFile.name,
             content: textContent.slice(0, 200000),
             mimeType: localFile.type || 'text/plain',
+            parentId: currentFolderId ?? undefined,
           }),
         });
         const data = (await res.json()) as {
@@ -468,8 +647,10 @@ export default function App() {
           });
         }
       }
-      await loadDriveFiles(token);
-      setBannerNotice(`Uploaded ${uploadedCount} ${uploadedCount === 1 ? 'file' : 'files'} to Google Drive.`);
+      await loadDriveFiles(token, currentFolderId);
+      setBannerNotice(
+        `Uploaded ${uploadedCount} ${uploadedCount === 1 ? 'file' : 'files'} to Google Drive.`
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'File upload failed.';
       setBannerError(msg);
@@ -485,10 +666,23 @@ export default function App() {
 
     setBannerError(null);
     try {
-      const picked = await openGoogleDrivePicker(token);
-      if (picked) {
-        await loadDriveFiles(token);
-        setBannerNotice('Added selected files from Google Drive.');
+      const result = await openGoogleDrivePicker(token);
+      if (result.picked) {
+        if (result.docs.length === 1 && result.docs[0].mimeType === FOLDER_MIME_TYPE) {
+          await openFolder(result.docs[0].id);
+          setBannerNotice(`Opened Google Drive folder "${result.docs[0].name}".`);
+        } else {
+          for (const doc of result.docs) {
+            if (doc.mimeType !== FOLDER_MIME_TYPE) {
+              persistedSelectedIdsRef.current.add(doc.id);
+            }
+          }
+          savePersistedSelectedIds(persistedSelectedIdsRef.current);
+          await loadDriveFiles(token, currentFolderId);
+          setBannerNotice(
+            `Authorized ${result.docs.length} ${result.docs.length === 1 ? 'item' : 'items'} from Google Drive.`
+          );
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google Drive Picker is unavailable.';
@@ -500,13 +694,16 @@ export default function App() {
 
   // Trigger confirmation modal for single file rename
   const requestSingleRename = (file: DriveFileItem) => {
-    const targetName = (file.editedName ?? file.proposedName ?? '').trim();
-    if (!targetName || targetName === file.name) return;
+    if (isFolderItem(file)) return;
+    const rawTarget = (file.editedName ?? file.proposedName ?? '').trim();
+    if (!rawTarget) return;
+    const formattedTarget = formatFilenamePreview(rawTarget, file.name, file.mimeType, namingStyle);
+    if (!formattedTarget || formattedTarget === file.name) return;
     setPendingRenameTargets([
       {
         fileId: file.id,
         originalName: file.name,
-        newName: targetName,
+        newName: formattedTarget,
         coreTopic: file.coreTopic || 'Topic Rename',
         mode: 'rename',
       },
@@ -515,23 +712,33 @@ export default function App() {
 
   // Trigger confirmation modal for batch rename
   const requestBatchRename = () => {
-    const candidates = files.filter((f) => {
+    const candidates = documentFiles.filter((f) => {
       if (!f.selected) return false;
       if (f.status !== 'ready' && f.status !== 'renamed') return false;
-      const targetName = (f.editedName ?? f.proposedName ?? '').trim();
-      return targetName.length > 0 && targetName !== f.name;
+      const rawTarget = (f.editedName ?? f.proposedName ?? '').trim();
+      if (!rawTarget) return false;
+      const formattedTarget = formatFilenamePreview(
+        rawTarget,
+        f.name,
+        f.mimeType,
+        namingStyle
+      );
+      return formattedTarget.length > 0 && formattedTarget !== f.name;
     });
 
     if (candidates.length === 0) return;
 
     setPendingRenameTargets(
-      candidates.map((f) => ({
-        fileId: f.id,
-        originalName: f.name,
-        newName: (f.editedName ?? f.proposedName ?? f.name).trim(),
-        coreTopic: f.coreTopic || 'Topic Rename',
-        mode: 'rename',
-      }))
+      candidates.map((f) => {
+        const rawTarget = (f.editedName ?? f.proposedName ?? f.name).trim();
+        return {
+          fileId: f.id,
+          originalName: f.name,
+          newName: formatFilenamePreview(rawTarget, f.name, f.mimeType, namingStyle),
+          coreTopic: f.coreTopic || 'Topic Rename',
+          mode: 'rename',
+        };
+      })
     );
   };
 
@@ -559,9 +766,17 @@ export default function App() {
     setBannerNotice(null);
 
     const targetIds = new Set(pendingRenameTargets.map((t) => t.fileId));
-    setFiles((prev) =>
-      prev.map((f) => (targetIds.has(f.id) ? { ...f, status: 'renaming' } : f))
-    );
+    const markRenaming = (f: DriveFileItem): DriveFileItem =>
+      targetIds.has(f.id) ? { ...f, status: 'renaming' } : f;
+
+    setFiles((prev) => prev.map(markRenaming));
+    setKnownFilesById((prev) => {
+      const next = { ...prev };
+      for (const id of targetIds) {
+        if (next[id]) next[id] = markRenaming(next[id]);
+      }
+      return next;
+    });
 
     let successCount = 0;
     let failCount = 0;
@@ -596,23 +811,31 @@ export default function App() {
 
         successCount += 1;
 
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === target.fileId
-              ? {
-                  ...f,
-                  name: data.file!.name,
-                  modifiedTime: data.file!.modifiedTime ?? f.modifiedTime,
-                  webViewLink: data.file!.webViewLink ?? f.webViewLink,
-                  proposedName: data.file!.name,
-                  editedName: data.file!.name,
-                  status: target.mode === 'revert' ? 'ready' : 'renamed',
-                  selected: false,
-                  errorMessage: undefined,
-                }
-              : f
-          )
-        );
+        persistedSelectedIdsRef.current.delete(target.fileId);
+        savePersistedSelectedIds(persistedSelectedIdsRef.current);
+
+        const applyRenameSuccess = (f: DriveFileItem): DriveFileItem =>
+          f.id === target.fileId
+            ? {
+                ...f,
+                name: data.file!.name,
+                modifiedTime: data.file!.modifiedTime ?? f.modifiedTime,
+                webViewLink: data.file!.webViewLink ?? f.webViewLink,
+                proposedName: data.file!.name,
+                editedName: data.file!.name,
+                status: target.mode === 'revert' ? 'ready' : 'renamed',
+                selected: false,
+                errorMessage: undefined,
+              }
+            : f;
+
+        setFiles((prev) => prev.map(applyRenameSuccess));
+        setKnownFilesById((prev) => {
+          if (!prev[target.fileId]) return prev;
+          const next = { ...prev, [target.fileId]: applyRenameSuccess(prev[target.fileId]) };
+          knownFilesRef.current = next;
+          return next;
+        });
 
         appendAuditEntry({
           fileId: target.fileId,
@@ -634,10 +857,13 @@ export default function App() {
       } catch (err) {
         failCount += 1;
         const msg = err instanceof Error ? err.message : 'Drive rename error';
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === target.fileId ? { ...f, status: 'error', errorMessage: msg } : f
-          )
+        const applyError = (f: DriveFileItem): DriveFileItem =>
+          f.id === target.fileId ? { ...f, status: 'error', errorMessage: msg } : f;
+        setFiles((prev) => prev.map(applyError));
+        setKnownFilesById((prev) =>
+          prev[target.fileId]
+            ? { ...prev, [target.fileId]: applyError(prev[target.fileId]) }
+            : prev
         );
         appendAuditEntry({
           fileId: target.fileId,
@@ -669,75 +895,302 @@ export default function App() {
     setFiles((prev) =>
       prev.map((f) => (f.id === fileId ? { ...f, editedName: nextName } : f))
     );
-  };
-
-  const toggleSelectFile = (fileId: string) => {
-    setFiles((prev) =>
-      prev.map((f) => (f.id === fileId ? { ...f, selected: !f.selected } : f))
+    setKnownFilesById((prev) =>
+      prev[fileId] ? { ...prev, [fileId]: { ...prev[fileId], editedName: nextName } } : prev
     );
   };
 
+  const toggleSelectFile = (fileId: string) => {
+    const targetItem = files.find((f) => f.id === fileId) ?? knownFilesRef.current[fileId];
+    if (!targetItem || isFolderItem(targetItem)) return;
+    const nextSelected = !targetItem.selected;
+    if (nextSelected) {
+      persistedSelectedIdsRef.current.add(fileId);
+    } else {
+      persistedSelectedIdsRef.current.delete(fileId);
+    }
+    savePersistedSelectedIds(persistedSelectedIdsRef.current);
+
+    setFiles((prev) =>
+      prev.map((f) => (f.id === fileId && !isFolderItem(f) ? { ...f, selected: nextSelected } : f))
+    );
+    setKnownFilesById((prev) => {
+      if (!prev[fileId] || isFolderItem(prev[fileId])) return prev;
+      const next = { ...prev, [fileId]: { ...prev[fileId], selected: nextSelected } };
+      knownFilesRef.current = next;
+      return next;
+    });
+  };
+
+  const documentFiles = useMemo(() => files.filter((f) => !isFolderItem(f)), [files]);
+
+  const allKnownDocumentFiles = useMemo(
+    () => Object.values(knownFilesById).filter((f) => !isFolderItem(f)),
+    [knownFilesById]
+  );
+
+  const folderNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of Object.values(knownFilesById)) {
+      if (isFolderItem(item)) map.set(item.id, item.name);
+    }
+    for (const item of files) {
+      if (isFolderItem(item)) map.set(item.id, item.name);
+    }
+    return map;
+  }, [files, knownFilesById]);
+
+  const folderChildCountMap = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of files) {
+      for (const parentId of item.parents || []) {
+        counts.set(parentId, (counts.get(parentId) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [files]);
+
+  const scopedItems = useMemo(() => {
+    // When a category filter is active or "All Files" batch mode is selected, show document files flatly
+    if (viewMode === 'all' || selectedCategory !== null) {
+      return documentFiles;
+    }
+
+    // At Drive root in Folder mode, hide nested children that belong to an accessible folder
+    if (currentFolderId === null) {
+      const accessibleFolderIds = new Set(files.filter(isFolderItem).map((f) => f.id));
+      return files.filter((f) => {
+        const parents = f.parents || [];
+        return !parents.some((pid) => accessibleFolderIds.has(pid));
+      });
+    }
+
+    // Inside a subfolder, API returns direct children
+    return files;
+  }, [currentFolderId, documentFiles, files, selectedCategory, viewMode]);
+
   const filteredFiles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return files.filter((f) => {
-      if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
-      if (statusFilter === 'ready' && f.status !== 'ready') return false;
-      if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
+    const list = scopedItems.filter((f) => {
+      const isFolder = isFolderItem(f);
+
+      if (selectedCategory !== null) {
+        if (isFolder) return false;
+        const itemCategory = (f.category || f.coreTopic || '').trim();
+        if (itemCategory !== selectedCategory) return false;
+      }
+
+      if (statusFilter !== 'all') {
+        if (isFolder) return false;
+        if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
+        if (statusFilter === 'ready' && f.status !== 'ready') return false;
+        if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
+      }
+
       if (!q) return true;
       return (
         f.name.toLowerCase().includes(q) ||
         (f.coreTopic || '').toLowerCase().includes(q) ||
+        (f.category || '').toLowerCase().includes(q) ||
         (f.editedName || f.proposedName || '').toLowerCase().includes(q)
       );
     });
-  }, [files, searchQuery, statusFilter]);
+
+    // Always sort folders before document files
+    return [...list].sort((a, b) => {
+      const aFolder = isFolderItem(a) ? 0 : 1;
+      const bFolder = isFolderItem(b) ? 0 : 1;
+      if (aFolder !== bFolder) return aFolder - bFolder;
+      if (aFolder === 0) return a.name.localeCompare(b.name);
+      return 0;
+    });
+  }, [scopedItems, searchQuery, selectedCategory, statusFilter]);
+
+  const selectableVisibleDocs = useMemo(
+    () => filteredFiles.filter((f) => !isFolderItem(f)),
+    [filteredFiles]
+  );
+
+  const selectedVisibleDocsCount = useMemo(
+    () => selectableVisibleDocs.filter((f) => Boolean(f.selected)).length,
+    [selectableVisibleDocs]
+  );
 
   const allVisibleSelected =
-    filteredFiles.length > 0 && filteredFiles.every((f) => Boolean(f.selected));
+    selectableVisibleDocs.length > 0 &&
+    selectedVisibleDocsCount === selectableVisibleDocs.length;
 
   const toggleSelectAllVisible = () => {
-    const visibleIds = new Set(filteredFiles.map((f) => f.id));
+    const visibleDocIds = new Set(selectableVisibleDocs.map((f) => f.id));
+    if (visibleDocIds.size === 0) return;
+    const nextSelected = !allVisibleSelected;
+    for (const id of visibleDocIds) {
+      if (nextSelected) {
+        persistedSelectedIdsRef.current.add(id);
+      } else {
+        persistedSelectedIdsRef.current.delete(id);
+      }
+    }
+    savePersistedSelectedIds(persistedSelectedIdsRef.current);
+
     setFiles((prev) =>
-      prev.map((f) => (visibleIds.has(f.id) ? { ...f, selected: !allVisibleSelected } : f))
+      prev.map((f) => (visibleDocIds.has(f.id) ? { ...f, selected: nextSelected } : f))
     );
+    setKnownFilesById((prev) => {
+      const next = { ...prev };
+      for (const id of visibleDocIds) {
+        if (next[id]) next[id] = { ...next[id], selected: nextSelected };
+      }
+      knownFilesRef.current = next;
+      return next;
+    });
   };
 
+  const selectAllDocumentsInScope = useCallback(() => {
+    const docIds = new Set(selectableVisibleDocs.map((f) => f.id));
+    if (docIds.size === 0) return;
+    for (const id of docIds) {
+      persistedSelectedIdsRef.current.add(id);
+    }
+    savePersistedSelectedIds(persistedSelectedIdsRef.current);
+
+    setFiles((prev) =>
+      prev.map((f) => (docIds.has(f.id) ? { ...f, selected: true } : f))
+    );
+    setKnownFilesById((prev) => {
+      const next = { ...prev };
+      for (const id of docIds) {
+        if (next[id]) next[id] = { ...next[id], selected: true };
+      }
+      knownFilesRef.current = next;
+      return next;
+    });
+  }, [selectableVisibleDocs]);
+
   const stats = useMemo(() => {
-    const total = files.length;
-    const analyzed = files.filter((f) => f.status === 'ready' || f.status === 'renamed').length;
-    const pendingRenames = files.filter((f) => {
-      const target = (f.editedName ?? f.proposedName ?? '').trim();
-      return (f.status === 'ready' || f.status === 'renamed') && target && target !== f.name;
+    const total = documentFiles.length;
+    const folderCount = files.filter(isFolderItem).length;
+    const analyzed = documentFiles.filter(
+      (f) => f.status === 'ready' || f.status === 'renamed'
+    ).length;
+    const pendingRenames = documentFiles.filter((f) => {
+      const rawTarget = (f.editedName ?? f.proposedName ?? '').trim();
+      if (!rawTarget) return false;
+      const target = formatFilenamePreview(rawTarget, f.name, f.mimeType, namingStyle);
+      return (f.status === 'ready' || f.status === 'renamed') && target !== f.name;
     }).length;
     const completedRenames = auditEntries.filter(
       (e) => e.action === 'rename' && e.status === 'success'
     ).length;
-    const selectedReadyForRename = files.filter((f) => {
+    const selectedReadyForRename = documentFiles.filter((f) => {
       if (!f.selected) return false;
-      const target = (f.editedName ?? f.proposedName ?? '').trim();
-      return (f.status === 'ready' || f.status === 'renamed') && target && target !== f.name;
+      const rawTarget = (f.editedName ?? f.proposedName ?? '').trim();
+      if (!rawTarget) return false;
+      const target = formatFilenamePreview(rawTarget, f.name, f.mimeType, namingStyle);
+      return (f.status === 'ready' || f.status === 'renamed') && target !== f.name;
     }).length;
-    const selectedForAnalysis = files.filter((f) => f.selected).length;
+    const selectedForAnalysis = documentFiles.filter((f) => f.selected).length;
     return {
       total,
+      folderCount,
       analyzed,
       pendingRenames,
       completedRenames,
       selectedReadyForRename,
       selectedForAnalysis,
     };
-  }, [files, auditEntries]);
+  }, [documentFiles, files, auditEntries, namingStyle]);
 
-  const selectedFiles = useMemo(() => files.filter((f) => Boolean(f.selected)), [files]);
+  const selectedFiles = useMemo(
+    () => documentFiles.filter((f) => Boolean(f.selected)),
+    [documentFiles]
+  );
+
+  const selectedUnanalyzedFiles = useMemo(
+    () =>
+      selectedFiles.filter(
+        (f) => f.status === 'unscanned' || f.status === 'error'
+      ),
+    [selectedFiles]
+  );
 
   const clearAllSelection = useCallback(() => {
+    persistedSelectedIdsRef.current.clear();
+    savePersistedSelectedIds(persistedSelectedIdsRef.current);
+
     setFiles((prev) => prev.map((f) => (f.selected ? { ...f, selected: false } : f)));
+    setKnownFilesById((prev) => {
+      const next: Record<string, DriveFileItem> = {};
+      for (const [id, item] of Object.entries(prev)) {
+        next[id] = item.selected ? { ...item, selected: false } : item;
+      }
+      knownFilesRef.current = next;
+      return next;
+    });
   }, []);
 
   const inspectedFile = useMemo(
-    () => files.find((f) => f.id === inspectedFileId) ?? null,
-    [files, inspectedFileId]
+    () =>
+      files.find((f) => f.id === inspectedFileId) ??
+      (inspectedFileId ? knownFilesById[inspectedFileId] ?? null : null),
+    [files, inspectedFileId, knownFilesById]
   );
+
+  // Global keyboard shortcuts: Ctrl+Enter -> Batch Rename, Ctrl+A -> Select all visible files
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        activeTab !== 'workspace' ||
+        needsAuth ||
+        inspectedFileId !== null ||
+        pendingRenameTargets.length > 0
+      ) {
+        return;
+      }
+
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const inputType = tag === 'input' ? (target as HTMLInputElement).type : '';
+      const isTextInput =
+        (tag === 'input' && inputType !== 'checkbox' && inputType !== 'button' && inputType !== 'submit') ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        Boolean(target?.isContentEditable);
+
+      if (event.key.toLowerCase() === 'a') {
+        if (isTextInput) return;
+        if (selectableVisibleDocs.length === 0) return;
+        event.preventDefault();
+        selectAllDocumentsInScope();
+        return;
+      }
+
+      if (event.key === 'Enter') {
+        if (tag === 'textarea' || target?.id === 'new-folder-name') return;
+        if (stats.selectedReadyForRename === 0 || isExecutingRename) return;
+        event.preventDefault();
+        requestBatchRename();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    activeTab,
+    needsAuth,
+    inspectedFileId,
+    pendingRenameTargets.length,
+    selectableVisibleDocs.length,
+    selectAllDocumentsInScope,
+    stats.selectedReadyForRename,
+    isExecutingRename,
+    documentFiles,
+    namingStyle,
+  ]);
 
   return (
     <div className="min-h-screen w-full overflow-x-clip bg-slate-50 text-slate-900">
@@ -1132,10 +1585,18 @@ export default function App() {
               </div>
             </section>
 
+            {/* D3.js Topic Summary Category Distribution */}
+            <TopicSummaryChart
+              files={allKnownDocumentFiles}
+              selectedCategory={selectedCategory}
+              onSelectCategory={handleSelectCategory}
+            />
+
             {/* Persistent Selection Overview Card (visible when 1+ files selected) */}
             <SelectionOverviewCard
               selectedFiles={selectedFiles}
-              totalFilesCount={files.length}
+              totalFilesCount={documentFiles.length}
+              namingStyle={namingStyle}
               isAnalyzing={isAnalyzingBatch}
               isExecutingRename={isExecutingRename}
               onAnalyzeSelected={() => void handleAnalyzeFiles(selectedFiles)}
@@ -1202,15 +1663,13 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
                   <button
                     type="button"
-                    disabled={isAnalyzingBatch || files.length === 0}
+                    disabled={isAnalyzingBatch || documentFiles.length === 0}
                     onClick={() => {
                       const targets =
-                        stats.selectedForAnalysis > 0
-                          ? files.filter((f) => f.selected)
-                          : files;
+                        stats.selectedForAnalysis > 0 ? selectedFiles : documentFiles;
                       void handleAnalyzeFiles(targets);
                     }}
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:px-3.5 sm:text-sm"
@@ -1223,16 +1682,32 @@ export default function App() {
                     <span className="truncate">
                       {isAnalyzingBatch
                         ? 'Analyzing...'
-                        : stats.selectedForAnalysis > 0 && stats.selectedForAnalysis < files.length
+                        : stats.selectedForAnalysis > 0 && stats.selectedForAnalysis < documentFiles.length
                           ? `Analyze (${stats.selectedForAnalysis})`
                           : 'Analyze All'}
                     </span>
                   </button>
 
+                  {selectedUnanalyzedFiles.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={isAnalyzingBatch}
+                      onClick={() => void handleAnalyzeFiles(selectedUnanalyzedFiles)}
+                      title={`Analyze ${selectedUnanalyzedFiles.length} unanalyzed file(s) in current selection`}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:px-3.5 sm:text-sm"
+                    >
+                      <Sparkles className="h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
+                      <span className="truncate">
+                        Analyze Unanalyzed ({selectedUnanalyzedFiles.length})
+                      </span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     disabled={stats.selectedReadyForRename === 0 || isExecutingRename}
                     onClick={requestBatchRename}
+                    title="Trigger Batch Rename for selected ready files (Ctrl+Enter)"
                     className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:px-4 sm:text-sm"
                   >
                     <Check className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -1246,6 +1721,153 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Folder Navigation, Breadcrumbs & All-Files Batch Bar */}
+              <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                  <div
+                    role="group"
+                    aria-label="Drive view mode"
+                    className="inline-flex rounded-md border border-slate-200 bg-slate-100 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void switchViewMode('all')}
+                      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                        viewMode === 'all' || selectedCategory !== null
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>All Files</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void switchViewMode('folders')}
+                      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
+                        viewMode === 'folders' && selectedCategory === null
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Folder className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Folders</span>
+                    </button>
+                  </div>
+
+                  {viewMode === 'folders' && selectedCategory === null ? (
+                    <nav aria-label="Folder breadcrumbs" className="flex flex-wrap items-center gap-1 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => void openFolder(null)}
+                        className={`inline-flex items-center gap-1 rounded px-2 py-1 font-medium transition-colors ${
+                          currentFolderId === null
+                            ? 'bg-white text-slate-900 shadow-2xs ring-1 ring-slate-200'
+                            : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+                        }`}
+                      >
+                        <Home className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Drive Root</span>
+                      </button>
+
+                      {breadcrumbs.map((crumb, index) => {
+                        const isLast = index === breadcrumbs.length - 1;
+                        return (
+                          <React.Fragment key={crumb.id}>
+                            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                            <button
+                              type="button"
+                              onClick={() => void openFolder(crumb.id)}
+                              className={`max-w-[180px] truncate rounded px-2 py-1 font-medium transition-colors ${
+                                isLast
+                                  ? 'bg-white text-slate-900 shadow-2xs ring-1 ring-slate-200'
+                                  : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
+                              }`}
+                              title={crumb.name}
+                            >
+                              {crumb.name}
+                            </button>
+                          </React.Fragment>
+                        );
+                      })}
+                    </nav>
+                  ) : (
+                    <span className="text-xs text-slate-600 tabular-nums">
+                      Showing all {selectableVisibleDocs.length} accessible{' '}
+                      {selectableVisibleDocs.length === 1 ? 'document' : 'documents'}
+                      {selectedCategory ? ` in "${selectedCategory}"` : ' across folders'}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectableVisibleDocs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={
+                        allVisibleSelected ? clearAllSelection : selectAllDocumentsInScope
+                      }
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap"
+                    >
+                      <span>
+                        {allVisibleSelected
+                          ? 'Deselect All'
+                          : `Select All Files (${selectableVisibleDocs.length})`}
+                      </span>
+                    </button>
+                  )}
+
+                  {viewMode === 'folders' && (
+                    <button
+                      type="button"
+                      onClick={() => setShowNewFolderBar((prev) => !prev)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap"
+                    >
+                      <FolderPlus className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
+                      <span>New Folder</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {showNewFolderBar && (
+                <form
+                  onSubmit={(e) => void handleCreateFolder(e)}
+                  className="flex flex-col gap-2 border-b border-slate-200 bg-blue-50/50 px-4 py-3 sm:flex-row sm:items-center sm:px-6"
+                >
+                  <label htmlFor="new-folder-name" className="text-xs font-medium text-slate-700 whitespace-nowrap">
+                    {currentFolderId ? 'New subfolder name:' : 'New folder name:'}
+                  </label>
+                  <input
+                    id="new-folder-name"
+                    type="text"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder="e.g., Q4 Architecture Docs"
+                    className="h-9 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-blue-600 focus:outline-none sm:max-w-xs"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={isCreatingFolder || !newFolderName.trim()}
+                      className="inline-flex h-9 items-center rounded-md bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {isCreatingFolder ? 'Creating...' : 'Create Folder'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewFolderBar(false);
+                        setNewFolderName('');
+                      }}
+                      className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
+
               {/* Loading Skeleton */}
               {isLoadingFiles && files.length === 0 ? (
                 <div className="divide-y divide-slate-200">
@@ -1257,6 +1879,36 @@ export default function App() {
                       <div className="hidden h-4 animate-pulse rounded bg-slate-200 sm:col-span-2 sm:block" />
                     </div>
                   ))}
+                </div>
+              ) : files.length === 0 && currentFolderId !== null ? (
+                <div className="px-4 py-12 text-center sm:px-6">
+                  <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
+                    <FolderOpen className="h-5 w-5" aria-hidden="true" />
+                  </div>
+                  <h2 className="mt-4 text-base font-semibold text-slate-900">
+                    This Google Drive folder is empty
+                  </h2>
+                  <p className="mx-auto mt-1.5 max-w-md text-sm text-slate-600">
+                    Upload files directly into this folder, create a subfolder, or navigate back to Drive Root.
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => void openFolder(null)}
+                      className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      <Home className="h-4 w-4" aria-hidden="true" />
+                      <span>Back to Drive Root</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex h-10 items-center gap-1.5 rounded-md bg-blue-600 px-3.5 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      <Upload className="h-4 w-4" aria-hidden="true" />
+                      <span>Upload to Folder</span>
+                    </button>
+                  </div>
                 </div>
               ) : files.length === 0 ? (
                 /* Empty State */
@@ -1270,7 +1922,7 @@ export default function App() {
                   <p className="mx-auto mt-1.5 max-w-lg text-sm text-slate-600">
                     Because DriveTopic uses the least-privilege{' '}
                     <span className="font-mono text-xs text-slate-800">drive.file</span> scope, it
-                    only sees files you select, upload, or create with this app.
+                    only sees files and folders you select, upload, or create with this app.
                   </p>
                   <div className="mt-6 flex flex-col items-stretch justify-center gap-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                     <button
@@ -1308,6 +1960,7 @@ export default function App() {
                     onClick={() => {
                       setSearchQuery('');
                       setStatusFilter('all');
+                      setSelectedCategory(null);
                     }}
                     className="mt-2 min-h-[40px] text-sm font-medium text-blue-600 hover:underline"
                   >
@@ -1318,28 +1971,74 @@ export default function App() {
                 <>
                   {/* Mobile & Tablet Stacked Card-Row List (Zero Horizontal Overflow) */}
                   <div className="lg:hidden">
-                    <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-medium text-slate-600">
-                      <label className="inline-flex min-h-[36px] items-center gap-2.5">
-                        <input
-                          type="checkbox"
-                          checked={allVisibleSelected}
-                          onChange={toggleSelectAllVisible}
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
-                        />
-                        <span>Select all ({filteredFiles.length})</span>
-                      </label>
+                    <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium text-slate-600">
+                      <TriStateCheckbox
+                        totalCount={selectableVisibleDocs.length}
+                        selectedCount={selectedVisibleDocsCount}
+                        onToggle={toggleSelectAllVisible}
+                        showStateText
+                        ariaLabel="Select all visible documents"
+                      />
                       <span className="tabular-nums text-slate-500">
-                        {stats.selectedForAnalysis} selected
+                        {selectedVisibleDocsCount} of {selectableVisibleDocs.length} selected
                       </span>
                     </div>
 
                     <div className="divide-y divide-slate-200">
                       {filteredFiles.map((file) => {
+                        if (isFolderItem(file)) {
+                          const childCount = folderChildCountMap.get(file.id);
+                          return (
+                            <div
+                              key={file.id}
+                              className="flex items-center justify-between gap-3 bg-slate-50/40 px-4 py-3.5"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => void openFolder(file.id)}
+                                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                              >
+                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-blue-600">
+                                  <Folder className="h-4 w-4" aria-hidden="true" />
+                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-sm font-semibold text-slate-900">
+                                    {file.name}
+                                  </div>
+                                  <div className="mt-0.5 text-xs text-slate-500 tabular-nums">
+                                    Folder
+                                    {childCount !== undefined && childCount > 0
+                                      ? ` · ${childCount} ${childCount === 1 ? 'item' : 'items'}`
+                                      : ''}
+                                    {file.modifiedTime ? ` · ${formatShortDate(file.modifiedTime)}` : ''}
+                                  </div>
+                                </div>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void openFolder(file.id)}
+                                className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                              >
+                                <span>Open</span>
+                                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                              </button>
+                            </div>
+                          );
+                        }
+
                         const proposedValue = file.editedName ?? file.proposedName ?? '';
+                        const formattedProposed = proposedValue.trim()
+                          ? formatFilenamePreview(proposedValue, file.name, file.mimeType, namingStyle)
+                          : '';
                         const hasProposedChange =
                           (file.status === 'ready' || file.status === 'renamed') &&
-                          proposedValue.trim().length > 0 &&
-                          proposedValue.trim() !== file.name;
+                          formattedProposed.length > 0 &&
+                          formattedProposed !== file.name;
+                        const parentFolderName =
+                          viewMode === 'all' && file.parents?.[0]
+                            ? folderNameById.get(file.parents[0])
+                            : undefined;
 
                         return (
                           <div key={file.id} className="space-y-3 px-4 py-4">
@@ -1350,7 +2049,7 @@ export default function App() {
                                   aria-label={`Select ${file.name}`}
                                   checked={Boolean(file.selected)}
                                   onChange={() => toggleSelectFile(file.id)}
-                                  className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                                  className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 accent-blue-600 focus:ring-blue-600"
                                 />
                                 <div className="min-w-0 flex-1">
                                   <button
@@ -1366,6 +2065,14 @@ export default function App() {
                                     <span>{formatBytes(file.size)}</span>
                                     <span aria-hidden="true">·</span>
                                     <span>{formatShortDate(file.modifiedTime)}</span>
+                                    {parentFolderName && (
+                                      <>
+                                        <span aria-hidden="true">·</span>
+                                        <span className="truncate text-slate-600">
+                                          in {parentFolderName}
+                                        </span>
+                                      </>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -1417,6 +2124,11 @@ export default function App() {
                               <div className="pl-7">
                                 <div className="text-xs font-semibold text-slate-900">
                                   {file.coreTopic}
+                                  {file.category && file.category !== file.coreTopic && (
+                                    <span className="ml-1.5 font-normal text-slate-500">
+                                      · {file.category}
+                                    </span>
+                                  )}
                                 </div>
                                 <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-slate-600">
                                   {file.summary}
@@ -1445,11 +2157,14 @@ export default function App() {
                                     confidence={file.confidence}
                                   />
                                 </div>
-                                <input
+                                <ProposedFilenameInput
                                   id={`mobile-proposed-${file.id}`}
-                                  type="text"
+                                  ariaLabel={`Proposed filename for ${file.name}`}
                                   value={proposedValue}
-                                  onChange={(e) => updateEditedName(file.id, e.target.value)}
+                                  originalName={file.name}
+                                  mimeType={file.mimeType}
+                                  namingStyle={namingStyle}
+                                  onChange={(next) => updateEditedName(file.id, next)}
                                   className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
                                 />
                               </div>
@@ -1510,16 +2225,15 @@ export default function App() {
                     <table className="w-full border-collapse text-left text-sm">
                       <thead>
                         <tr className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-500">
-                          <th className="w-10 px-6 py-3">
-                            <input
-                              type="checkbox"
-                              aria-label="Select all visible files"
-                              checked={allVisibleSelected}
-                              onChange={toggleSelectAllVisible}
-                              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                          <th className="w-12 px-5 py-2.5">
+                            <TriStateCheckbox
+                              totalCount={selectableVisibleDocs.length}
+                              selectedCount={selectedVisibleDocsCount}
+                              onToggle={toggleSelectAllVisible}
+                              ariaLabel="Select all visible documents"
                             />
                           </th>
-                          <th className="px-4 py-3">Original File</th>
+                          <th className="px-4 py-3">Original File / Folder</th>
                           <th className="px-4 py-3">Core Topic &amp; Summary</th>
                           <th className="px-4 py-3">Proposed Filename</th>
                           <th className="px-4 py-3">Status</th>
@@ -1528,11 +2242,86 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-slate-200">
                         {filteredFiles.map((file) => {
+                          if (isFolderItem(file)) {
+                            const childCount = folderChildCountMap.get(file.id);
+                            return (
+                              <tr key={file.id} className="bg-slate-50/40 hover:bg-slate-100/70">
+                                <td className="px-6 py-3.5">
+                                  <Folder className="h-4 w-4 text-blue-600" aria-hidden="true" />
+                                </td>
+                                <td className="max-w-[260px] px-4 py-3.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => void openFolder(file.id)}
+                                    className="truncate text-left font-semibold text-slate-900 hover:text-blue-600 hover:underline"
+                                    title={`Open folder ${file.name}`}
+                                  >
+                                    {file.name}
+                                  </button>
+                                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500 tabular-nums">
+                                    <span>Drive Folder</span>
+                                    {childCount !== undefined && childCount > 0 && (
+                                      <>
+                                        <span aria-hidden="true">·</span>
+                                        <span>
+                                          {childCount} {childCount === 1 ? 'item' : 'items'}
+                                        </span>
+                                      </>
+                                    )}
+                                    {file.modifiedTime && (
+                                      <>
+                                        <span aria-hidden="true">·</span>
+                                        <span>{formatShortDate(file.modifiedTime)}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3.5 text-xs text-slate-500">
+                                  Click to browse subfolders and nested files
+                                </td>
+                                <td className="px-4 py-3.5 text-xs text-slate-400">—</td>
+                                <td className="whitespace-nowrap px-4 py-3.5 text-xs font-medium text-slate-600">
+                                  Folder
+                                </td>
+                                <td className="whitespace-nowrap px-6 py-3.5 text-right">
+                                  <div className="inline-flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void openFolder(file.id)}
+                                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                                    >
+                                      <span>Open Folder</span>
+                                      <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                    {file.webViewLink && (
+                                      <a
+                                        href={file.webViewLink}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        aria-label={`Open ${file.name} in Google Drive`}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                      >
+                                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                                      </a>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          }
+
                           const proposedValue = file.editedName ?? file.proposedName ?? '';
+                          const formattedProposed = proposedValue.trim()
+                            ? formatFilenamePreview(proposedValue, file.name, file.mimeType, namingStyle)
+                            : '';
                           const hasProposedChange =
                             (file.status === 'ready' || file.status === 'renamed') &&
-                            proposedValue.trim().length > 0 &&
-                            proposedValue.trim() !== file.name;
+                            formattedProposed.length > 0 &&
+                            formattedProposed !== file.name;
+                          const parentFolderName =
+                            viewMode === 'all' && file.parents?.[0]
+                              ? folderNameById.get(file.parents[0])
+                              : undefined;
 
                           return (
                             <tr key={file.id} className="align-top hover:bg-slate-50/70">
@@ -1542,7 +2331,7 @@ export default function App() {
                                   aria-label={`Select ${file.name}`}
                                   checked={Boolean(file.selected)}
                                   onChange={() => toggleSelectFile(file.id)}
-                                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 accent-blue-600 focus:ring-blue-600"
                                 />
                               </td>
 
@@ -1563,6 +2352,14 @@ export default function App() {
                                   <span>{formatBytes(file.size)}</span>
                                   <span aria-hidden="true">·</span>
                                   <span>{formatShortDate(file.modifiedTime)}</span>
+                                  {parentFolderName && (
+                                    <>
+                                      <span aria-hidden="true">·</span>
+                                      <span className="truncate text-slate-600">
+                                        in {parentFolderName}
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
                               </td>
 
@@ -1571,6 +2368,11 @@ export default function App() {
                                   <div>
                                     <div className="text-xs font-semibold text-slate-900">
                                       {file.coreTopic}
+                                      {file.category && file.category !== file.coreTopic && (
+                                        <span className="ml-1.5 font-normal text-slate-500">
+                                          · {file.category}
+                                        </span>
+                                      )}
                                     </div>
                                     <p
                                       className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-slate-600"
@@ -1596,11 +2398,13 @@ export default function App() {
                               <td className="min-w-[300px] px-4 py-3.5">
                                 {file.status === 'ready' || file.status === 'renamed' ? (
                                   <div className="flex items-center gap-2">
-                                    <input
-                                      type="text"
-                                      aria-label={`Proposed filename for ${file.name}`}
+                                    <ProposedFilenameInput
+                                      ariaLabel={`Proposed filename for ${file.name}`}
                                       value={proposedValue}
-                                      onChange={(e) => updateEditedName(file.id, e.target.value)}
+                                      originalName={file.name}
+                                      mimeType={file.mimeType}
+                                      namingStyle={namingStyle}
+                                      onChange={(next) => updateEditedName(file.id, next)}
                                       className="h-9 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
                                     />
                                     <ConfidenceBadge
@@ -1714,6 +2518,7 @@ export default function App() {
 
       <SnippetDrawer
         file={inspectedFile}
+        namingStyle={namingStyle}
         onClose={() => setInspectedFileId(null)}
         onUpdateProposedName={updateEditedName}
         onRequestRename={(file) => {

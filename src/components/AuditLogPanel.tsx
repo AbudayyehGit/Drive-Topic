@@ -42,7 +42,7 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
   }, [entries, query, statusFilter]);
 
   const handleExportCsv = () => {
-    if (filteredEntries.length === 0) return;
+    if (entries.length === 0) return;
 
     const headers = [
       'Timestamp',
@@ -55,7 +55,7 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
       'Reverted',
       'Error Message',
     ];
-    const rows = filteredEntries.map((entry) => [
+    const rows = entries.map((entry) => [
       entry.timestamp,
       entry.action,
       entry.status,
@@ -84,7 +84,7 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
     document.body.removeChild(link);
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-    setExportedNotice(`Exported ${filteredEntries.length} rows`);
+    setExportedNotice(`Exported ${entries.length} rows`);
     window.setTimeout(() => setExportedNotice(null), 2500);
   };
 
@@ -134,9 +134,9 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
             <button
               type="button"
               onClick={handleExportCsv}
-              disabled={filteredEntries.length === 0}
-              title={`Download current audit history (${filteredEntries.length} ${
-                filteredEntries.length === 1 ? 'entry' : 'entries'
+              disabled={entries.length === 0}
+              title={`Download audit history (${entries.length} ${
+                entries.length === 1 ? 'entry' : 'entries'
               }) as CSV`}
               className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:flex-none"
             >
