@@ -25,6 +25,8 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed'>('all');
 
+  const [exportedNotice, setExportedNotice] = useState<string | null>(null);
+
   const filteredEntries = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((entry) => {
@@ -40,7 +42,19 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
   }, [entries, query, statusFilter]);
 
   const handleExportCsv = () => {
-    const headers = ['Timestamp', 'Action', 'Status', 'Core Topic', 'Original Name', 'New Name', 'File ID'];
+    if (filteredEntries.length === 0) return;
+
+    const headers = [
+      'Timestamp',
+      'Action',
+      'Status',
+      'Core Topic',
+      'Original Name',
+      'New Name',
+      'File ID',
+      'Reverted',
+      'Error Message',
+    ];
     const rows = filteredEntries.map((entry) => [
       entry.timestamp,
       entry.action,
@@ -49,18 +63,29 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
       entry.originalName,
       entry.newName,
       entry.fileId,
+      entry.reverted ? 'Yes' : 'No',
+      entry.errorMessage ?? '',
     ]);
 
     const escapeCell = (val: string) => `"${String(val).replace(/"/g, '""')}"`;
-    const csv = [headers, ...rows].map((row) => row.map(escapeCell).join(',')).join('\n');
+    const csvContent =
+      '\uFEFF' + [headers, ...rows].map((row) => row.map(escapeCell).join(',')).join('\r\n');
 
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `drivetopic-audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.setAttribute(
+      'download',
+      `drivetopic-audit-log-${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(link);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    setExportedNotice(`Exported ${filteredEntries.length} rows`);
+    window.setTimeout(() => setExportedNotice(null), 2500);
   };
 
   return (
@@ -110,10 +135,13 @@ export const AuditLogPanel: React.FC<AuditLogPanelProps> = ({
               type="button"
               onClick={handleExportCsv}
               disabled={filteredEntries.length === 0}
+              title={`Download current audit history (${filteredEntries.length} ${
+                filteredEntries.length === 1 ? 'entry' : 'entries'
+              }) as CSV`}
               className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap sm:h-9 sm:flex-none"
             >
               <Download className="h-4 w-4" aria-hidden="true" />
-              <span>Export CSV</span>
+              <span>{exportedNotice ?? 'Export CSV'}</span>
             </button>
 
             {entries.length > 0 && (

@@ -23,6 +23,7 @@ export interface DriveFileItem {
   summary?: string;
   keywords?: string[];
   confidence?: AnalysisConfidence;
+  confidenceScore?: number;
   proposedName?: string;
   editedName?: string;
   errorMessage?: string;
@@ -36,6 +37,7 @@ export interface AnalyzeResponseItem {
   summary: string;
   proposedName: string;
   confidence: AnalysisConfidence;
+  confidenceScore?: number;
   keywords: string[];
   error?: string;
 }

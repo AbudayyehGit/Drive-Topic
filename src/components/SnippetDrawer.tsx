@@ -1,6 +1,7 @@
 import React from 'react';
 import { ExternalLink, FileText, X } from 'lucide-react';
 import type { DriveFileItem } from '../types';
+import { ConfidenceBadge } from './ConfidenceBadge';
 
 interface SnippetDrawerProps {
   file: DriveFileItem | null;
@@ -57,7 +58,13 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5 sm:space-y-6 sm:px-6">
           <div>
-            <h3 className="text-xs font-semibold text-slate-500">Extracted Core Topic</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-slate-500">Extracted Core Topic</h3>
+              <ConfidenceBadge
+                confidenceScore={file.confidenceScore}
+                confidence={file.confidence}
+              />
+            </div>
             <p className="mt-1.5 text-sm font-medium text-slate-900">
               {file.coreTopic || 'Not analyzed yet'}
             </p>

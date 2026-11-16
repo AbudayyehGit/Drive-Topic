@@ -34,6 +34,8 @@ import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { RenameConfirmModal } from './components/RenameConfirmModal';
 import { SnippetDrawer } from './components/SnippetDrawer';
 import { AuditLogPanel } from './components/AuditLogPanel';
+import { ConfidenceBadge } from './components/ConfidenceBadge';
+import { SelectionOverviewCard } from './components/SelectionOverviewCard';
 
 const AUDIT_STORAGE_KEY = 'drivetopic_audit_log_v1';
 
@@ -346,6 +348,7 @@ export default function App() {
             summary: item.summary,
             keywords: item.keywords,
             confidence: item.confidence,
+            confidenceScore: item.confidenceScore,
             proposedName: item.proposedName,
             editedName: item.proposedName,
             selected: item.proposedName !== f.name,
@@ -724,6 +727,12 @@ export default function App() {
       selectedForAnalysis,
     };
   }, [files, auditEntries]);
+
+  const selectedFiles = useMemo(() => files.filter((f) => Boolean(f.selected)), [files]);
+
+  const clearAllSelection = useCallback(() => {
+    setFiles((prev) => prev.map((f) => (f.selected ? { ...f, selected: false } : f)));
+  }, []);
 
   const inspectedFile = useMemo(
     () => files.find((f) => f.id === inspectedFileId) ?? null,
@@ -1123,6 +1132,17 @@ export default function App() {
               </div>
             </section>
 
+            {/* Persistent Selection Overview Card (visible when 1+ files selected) */}
+            <SelectionOverviewCard
+              selectedFiles={selectedFiles}
+              totalFilesCount={files.length}
+              isAnalyzing={isAnalyzingBatch}
+              isExecutingRename={isExecutingRename}
+              onAnalyzeSelected={() => void handleAnalyzeFiles(selectedFiles)}
+              onBatchRename={requestBatchRename}
+              onClearSelection={clearAllSelection}
+            />
+
             {/* Workspace Toolbar & File List */}
             <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
               <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:gap-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
@@ -1413,18 +1433,24 @@ export default function App() {
 
                             {(file.status === 'ready' || file.status === 'renamed') && (
                               <div className="pl-7">
-                                <label
-                                  htmlFor={`mobile-proposed-${file.id}`}
-                                  className="block text-xs font-medium text-slate-500"
-                                >
-                                  Proposed Filename
-                                </label>
+                                <div className="flex items-center justify-between gap-2">
+                                  <label
+                                    htmlFor={`mobile-proposed-${file.id}`}
+                                    className="block text-xs font-medium text-slate-500"
+                                  >
+                                    Proposed Filename
+                                  </label>
+                                  <ConfidenceBadge
+                                    confidenceScore={file.confidenceScore}
+                                    confidence={file.confidence}
+                                  />
+                                </div>
                                 <input
                                   id={`mobile-proposed-${file.id}`}
                                   type="text"
                                   value={proposedValue}
                                   onChange={(e) => updateEditedName(file.id, e.target.value)}
-                                  className="mt-1 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
+                                  className="mt-1.5 h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
                                 />
                               </div>
                             )}
@@ -1567,15 +1593,21 @@ export default function App() {
                                 )}
                               </td>
 
-                              <td className="min-w-[250px] px-4 py-3.5">
+                              <td className="min-w-[300px] px-4 py-3.5">
                                 {file.status === 'ready' || file.status === 'renamed' ? (
-                                  <input
-                                    type="text"
-                                    aria-label={`Proposed filename for ${file.name}`}
-                                    value={proposedValue}
-                                    onChange={(e) => updateEditedName(file.id, e.target.value)}
-                                    className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
-                                  />
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="text"
+                                      aria-label={`Proposed filename for ${file.name}`}
+                                      value={proposedValue}
+                                      onChange={(e) => updateEditedName(file.id, e.target.value)}
+                                      className="h-9 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-900 focus:border-blue-600 focus:outline-none"
+                                    />
+                                    <ConfidenceBadge
+                                      confidenceScore={file.confidenceScore}
+                                      confidence={file.confidence}
+                                    />
+                                  </div>
                                 ) : (
                                   <span className="text-xs text-slate-400">—</span>
                                 )}

@@ -131,6 +131,7 @@ async function analyzeSnippetWithGemini(
   summary: string;
   proposedName: string;
   confidence: 'high' | 'medium' | 'low';
+  confidenceScore: number;
   keywords: string[];
 }> {
   if (!snippet || snippet.length < 10) {
@@ -139,13 +140,14 @@ async function analyzeSnippetWithGemini(
       summary: 'This file contains little or no extractable text content.',
       proposedName: originalName,
       confidence: 'low',
+      confidenceScore: 15,
       keywords: ['empty'],
     };
   }
 
   const prompt = [
     `Analyze the following document snippet from a file currently named "${originalName}".`,
-    `Determine its core topic, write a concise 1-2 sentence factual summary, extract 3-4 topic keywords, and propose a clean, descriptive document title (4 to 7 words, no file extension, no dates unless central to the document).`,
+    `Determine its core topic, write a concise 1-2 sentence factual summary, extract 3-4 topic keywords, rate your topic extraction certainty from 0 to 100 (confidenceScore), and propose a clean, descriptive document title (4 to 7 words, no file extension, no dates unless central to the document).`,
     '',
     'Document Snippet:',
     '---',
@@ -179,13 +181,17 @@ async function analyzeSnippetWithGemini(
             type: Type.STRING,
             description: 'Confidence level: high, medium, or low.',
           },
+          confidenceScore: {
+            type: Type.INTEGER,
+            description: 'Numeric confidence percentage from 0 to 100 reflecting how clearly the snippet identifies the core topic.',
+          },
           keywords: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
             description: '3 to 4 concise topic keywords.',
           },
         },
-        required: ['coreTopic', 'summary', 'proposedTitle', 'confidence', 'keywords'],
+        required: ['coreTopic', 'summary', 'proposedTitle', 'confidence', 'confidenceScore', 'keywords'],
       },
     },
   });
@@ -196,13 +202,26 @@ async function analyzeSnippetWithGemini(
     summary?: string;
     proposedTitle?: string;
     confidence?: string;
+    confidenceScore?: number;
     keywords?: string[];
   };
+
+  const fallbackScore =
+    parsed.confidence === 'high' ? 90 : parsed.confidence === 'low' ? 45 : 72;
+  const rawScore =
+    typeof parsed.confidenceScore === 'number' && Number.isFinite(parsed.confidenceScore)
+      ? parsed.confidenceScore
+      : fallbackScore;
+  const confidenceScore = Math.max(0, Math.min(100, Math.round(rawScore)));
 
   const confidenceNormalized =
     parsed.confidence === 'high' || parsed.confidence === 'medium' || parsed.confidence === 'low'
       ? parsed.confidence
-      : 'medium';
+      : confidenceScore >= 80
+        ? 'high'
+        : confidenceScore >= 55
+          ? 'medium'
+          : 'low';
 
   const proposedName = formatFilename(
     parsed.proposedTitle || parsed.coreTopic || originalName,
@@ -216,6 +235,7 @@ async function analyzeSnippetWithGemini(
     summary: (parsed.summary || 'Summary unavailable.').trim(),
     proposedName,
     confidence: confidenceNormalized,
+    confidenceScore,
     keywords: Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 4) : [],
   };
 }
