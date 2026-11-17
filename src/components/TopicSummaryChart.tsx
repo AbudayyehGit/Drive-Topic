@@ -158,16 +158,13 @@ export const TopicSummaryChart: React.FC<TopicSummaryChartProps> = ({
     // Full-row hit target
     rowGroups
       .append('rect')
+      .attr('class', 'row-hit')
       .attr('x', -margin.left)
       .attr('y', (d) => (yScale(d.category) ?? 0) - 3)
       .attr('width', chartWidth)
       .attr('height', yScale.bandwidth() + 6)
       .attr('rx', 6)
-      .attr('fill', (d) => {
-        if (selectedCategory === d.category) return '#eff6ff';
-        if (hoveredCategory === d.category) return '#f8fafc';
-        return 'transparent';
-      });
+      .attr('fill', (d) => (selectedCategory === d.category ? '#eff6ff' : 'transparent'));
 
     // Category label (left)
     rowGroups
@@ -198,6 +195,7 @@ export const TopicSummaryChart: React.FC<TopicSummaryChartProps> = ({
     // Data bar
     rowGroups
       .append('rect')
+      .attr('class', 'row-bar')
       .attr('x', 0)
       .attr('y', (d) => yScale(d.category) ?? 0)
       .attr('height', yScale.bandwidth())
@@ -205,7 +203,6 @@ export const TopicSummaryChart: React.FC<TopicSummaryChartProps> = ({
       .attr('fill', (d) => {
         if (selectedCategory && selectedCategory !== d.category) return '#cbd5e1';
         if (selectedCategory === d.category) return '#2563eb';
-        if (hoveredCategory === d.category) return '#1d4ed8';
         return '#3b82f6';
       })
       .attr('width', (d) => Math.max(4, xScale(d.count)));
@@ -221,7 +218,29 @@ export const TopicSummaryChart: React.FC<TopicSummaryChartProps> = ({
       .style('font-size', '12px')
       .style('font-variant-numeric', 'tabular-nums')
       .text((d) => `${d.count} (${d.sharePct}%)`);
-  }, [categoryData, chartWidth, hoveredCategory, onSelectCategory, selectedCategory]);
+  }, [categoryData, chartWidth, onSelectCategory, selectedCategory]);
+
+  useEffect(() => {
+    const svgEl = svgRef.current;
+    if (!svgEl || categoryData.length === 0) return;
+
+    const svg = d3.select(svgEl);
+    svg
+      .selectAll<SVGRectElement, CategoryDatum>('g.category-row rect.row-hit')
+      .attr('fill', (d) => {
+        if (selectedCategory === d.category) return '#eff6ff';
+        if (hoveredCategory === d.category) return '#f8fafc';
+        return 'transparent';
+      });
+    svg
+      .selectAll<SVGRectElement, CategoryDatum>('g.category-row rect.row-bar')
+      .attr('fill', (d) => {
+        if (selectedCategory && selectedCategory !== d.category) return '#cbd5e1';
+        if (selectedCategory === d.category) return '#2563eb';
+        if (hoveredCategory === d.category) return '#1d4ed8';
+        return '#3b82f6';
+      });
+  }, [categoryData.length, hoveredCategory, selectedCategory]);
 
   return (
     <section

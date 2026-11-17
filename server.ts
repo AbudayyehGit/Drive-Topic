@@ -57,6 +57,21 @@ function sanitizeFilenameStem(raw: string): string {
     .slice(0, 90);
 }
 
+function sanitizeFullFilename(raw: string): string {
+  const cleaned = raw
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  const extMatch = cleaned.match(/(\.[a-zA-Z0-9]{1,8})$/);
+  if (!extMatch || cleaned.length <= 120) {
+    return cleaned.slice(0, 120);
+  }
+  const ext = extMatch[1];
+  const stem = cleaned.slice(0, cleaned.length - ext.length).trim().slice(0, 120 - ext.length);
+  return `${stem || 'Untitled Document'}${ext}`;
+}
+
 function formatFilename(
   rawTopicTitle: string,
   originalName: string,
@@ -117,26 +132,47 @@ async function fetchDriveSnippet(
   fileId: string,
   mimeType: string
 ): Promise<string> {
+  if (
+    mimeType.startsWith('image/') ||
+    mimeType.startsWith('video/') ||
+    mimeType.startsWith('audio/') ||
+    mimeType === 'application/zip' ||
+    mimeType === 'application/octet-stream'
+  ) {
+    throw new Error(`Binary format (${mimeType}) is not supported for text snippet extraction.`);
+  }
+
   let url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`;
+  let isExport = false;
   if (mimeType === 'application/vnd.google-apps.document') {
     url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/plain`;
+    isExport = true;
   } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
     url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/csv`;
+    isExport = true;
   } else if (mimeType === 'application/vnd.google-apps.presentation') {
     url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/plain`;
+    isExport = true;
   } else if (mimeType.startsWith('application/vnd.google-apps.')) {
     throw new Error(`Unsupported Google Workspace format (${mimeType}) for text extraction.`);
   }
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+  };
+  if (!isExport) {
+    headers.Range = 'bytes=0-32767';
+  }
+
+  const response = await fetch(url, { headers });
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Drive content fetch failed (${response.status}): ${errText.slice(0, 200)}`);
+    const error = new Error(
+      `Drive content fetch failed (${response.status}): ${errText.slice(0, 200)}`
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   const text = await response.text();
@@ -291,7 +327,7 @@ async function createMultipartDriveFile(
     `--${boundary}--`;
 
   const response = await fetch(
-    `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,modifiedTime,size,webViewLink,parents`,
+    `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,modifiedTime,webViewLink`,
     {
       method: 'POST',
       headers: {
@@ -304,7 +340,11 @@ async function createMultipartDriveFile(
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Drive upload failed (${response.status}): ${errText}`);
+    const error = new Error(`Drive upload failed (${response.status}): ${errText}`) as Error & {
+      status?: number;
+    };
+    error.status = response.status;
+    throw error;
   }
 
   return response.json();
@@ -344,7 +384,11 @@ async function createDriveFolder(
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Drive folder creation failed (${response.status}): ${errText}`);
+    const error = new Error(`Drive folder creation failed (${response.status}): ${errText}`) as Error & {
+      status?: number;
+    };
+    error.status = response.status;
+    throw error;
   }
 
   return response.json();
@@ -524,8 +568,12 @@ async function startServer() {
       const folder = await createDriveFolder(token, cleanName, parentId);
       res.json({ folder });
     } catch (err) {
+      const status =
+        typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status?: unknown }).status === 'number'
+          ? (err as { status: number }).status
+          : 500;
       const message = err instanceof Error ? err.message : 'Failed to create Google Drive folder.';
-      res.status(500).json({ error: message });
+      res.status(status).json({ error: message });
     }
   });
 
@@ -550,6 +598,7 @@ async function startServer() {
     try {
       const ai = getGeminiClient();
       const analyses = [];
+      let authExpired = false;
 
       // Process in small batches of 3 to avoid Drive/Gemini rate spikes
       const batchSize = 3;
@@ -572,6 +621,16 @@ async function startServer() {
                 ...result,
               };
             } catch (fileErr) {
+              const errStatus =
+                typeof fileErr === 'object' &&
+                fileErr !== null &&
+                'status' in fileErr &&
+                typeof (fileErr as { status?: unknown }).status === 'number'
+                  ? (fileErr as { status: number }).status
+                  : undefined;
+              if (errStatus === 401) {
+                authExpired = true;
+              }
               const errMsg = fileErr instanceof Error ? fileErr.message : 'Analysis failed';
               return {
                 fileId: file.id,
@@ -587,6 +646,11 @@ async function startServer() {
           })
         );
         analyses.push(...batchResults);
+      }
+
+      if (authExpired && analyses.every((a) => Boolean(a.error))) {
+        res.status(401).json({ error: 'Google Drive authorization expired. Please sign in again.' });
+        return;
       }
 
       res.json({ analyses });
@@ -605,7 +669,7 @@ async function startServer() {
     }
 
     const { fileId, newName } = req.body as { fileId?: string; newName?: string };
-    const cleanName = typeof newName === 'string' ? sanitizeFilenameStem(newName) : '';
+    const cleanName = typeof newName === 'string' ? sanitizeFullFilename(newName) : '';
 
     if (!fileId || !cleanName) {
       res.status(400).json({ error: 'Both fileId and a valid newName are required.' });
@@ -614,7 +678,7 @@ async function startServer() {
 
     try {
       const driveRes = await fetch(
-        `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,modifiedTime,size,webViewLink`,
+        `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,modifiedTime,webViewLink`,
         {
           method: 'PATCH',
           headers: {
@@ -630,7 +694,6 @@ async function startServer() {
         name?: string;
         mimeType?: string;
         modifiedTime?: string;
-        size?: string;
         webViewLink?: string;
         error?: { message?: string };
       };
@@ -685,12 +748,16 @@ async function startServer() {
       }
       res.json({ files: created, folders: [archiveFolder, engineeringSubfolder] });
     } catch (err) {
+      const status =
+        typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status?: unknown }).status === 'number'
+          ? (err as { status: number }).status
+          : 500;
       const message = err instanceof Error ? err.message : 'Failed to create sample Drive files.';
-      res.status(500).json({ error: message });
+      res.status(status).json({ error: message });
     }
   });
 
-  // Upload a local text/markdown/csv file directly to Google Drive (supports current subfolder parentId)
+  // Upload a local text/markdown/csv file directly to Google Drive
   app.post('/api/drive/upload', async (req: Request, res: Response) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -718,7 +785,7 @@ async function startServer() {
       const file = await createMultipartDriveFile(
         token,
         {
-          name: sanitizeFilenameStem(name) || 'uploaded_note.txt',
+          name: sanitizeFullFilename(name) || 'uploaded_note.txt',
           mimeType: targetMime,
           ...(parents ? { parents } : {}),
         },
@@ -727,8 +794,12 @@ async function startServer() {
       );
       res.json({ file });
     } catch (err) {
+      const status =
+        typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status?: unknown }).status === 'number'
+          ? (err as { status: number }).status
+          : 500;
       const message = err instanceof Error ? err.message : 'Failed to upload file to Google Drive.';
-      res.status(500).json({ error: message });
+      res.status(status).json({ error: message });
     }
   });
 

@@ -469,12 +469,16 @@ function loadGapiScript(): Promise<void> {
     script.onload = () => {
       const gapi = (window as unknown as PickerGlobal).gapi;
       if (!gapi) {
+        gapiScriptPromise = null;
         reject(new Error('Google API script did not initialize.'));
         return;
       }
       gapi.load('picker', () => resolve());
     };
-    script.onerror = () => reject(new Error('Failed to load Google Picker script.'));
+    script.onerror = () => {
+      gapiScriptPromise = null;
+      reject(new Error('Failed to load Google Picker script.'));
+    };
     document.head.appendChild(script);
   });
   return gapiScriptPromise;

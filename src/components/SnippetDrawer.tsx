@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { ExternalLink, FileText, X } from 'lucide-react';
 import type { DriveFileItem, NamingStyle } from '../types';
+import { formatFilenamePreview } from '../lib/naming';
 import { ConfidenceBadge } from './ConfidenceBadge';
 import { ProposedFilenameInput } from './ProposedFilenameInput';
 
@@ -19,13 +20,27 @@ export const SnippetDrawer: React.FC<SnippetDrawerProps> = ({
   onUpdateProposedName,
   onRequestRename,
 }) => {
+  useEffect(() => {
+    if (!file) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [file, onClose]);
+
   if (!file) return null;
 
-  const activeName = file.editedName ?? file.proposedName ?? file.name;
+  const activeName = file.editedName ?? file.proposedName ?? '';
+  const formattedTarget = activeName.trim()
+    ? formatFilenamePreview(activeName, file.name, file.mimeType, namingStyle)
+    : '';
   const canRename =
     (file.status === 'ready' || file.status === 'renamed') &&
-    activeName.trim().length > 0 &&
-    activeName.trim() !== file.name;
+    formattedTarget.length > 0 &&
+    formattedTarget !== file.name;
 
   return (
     <div

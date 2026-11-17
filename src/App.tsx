@@ -228,7 +228,7 @@ export default function App() {
           };
         });
 
-        const nextKnown = { ...prevCache };
+        const nextKnown: Record<string, DriveFileItem> = {};
         for (const item of mergedItems) {
           nextKnown[item.id] = item;
         }
@@ -961,9 +961,15 @@ export default function App() {
     [files, inspectedFileId, knownFilesById]
   );
 
-  // Global keyboard shortcuts: Ctrl+Enter -> Batch Rename, Ctrl+A -> Select all visible files
+  // Global keyboard shortcuts: Escape -> close modal, Ctrl+Enter -> Batch Rename, Ctrl+A -> Select all visible files
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && pendingRenameTargets.length > 0 && !isExecutingRename) {
+        event.preventDefault();
+        setPendingRenameTargets([]);
+        return;
+      }
+
       if (
         activeTab !== 'workspace' ||
         needsAuth ||
