@@ -109,9 +109,7 @@ interface RawDriveFile {
   name: string;
   mimeType: string;
   modifiedTime?: string;
-  size?: string;
   webViewLink?: string;
-  parents?: string[];
 }
 
 async function fetchDriveSnippet(
@@ -352,41 +350,6 @@ async function createDriveFolder(
   return response.json();
 }
 
-async function resolveFolderBreadcrumbs(
-  accessToken: string,
-  folderId: string
-): Promise<Array<{ id: string; name: string }>> {
-  const trail: Array<{ id: string; name: string }> = [];
-  let cursor: string | undefined = folderId;
-  const visited = new Set<string>();
-
-  for (let depth = 0; depth < 6 && cursor; depth += 1) {
-    if (visited.has(cursor) || !/^[a-zA-Z0-9_-]+$/.test(cursor)) break;
-    visited.add(cursor);
-
-    const res = await fetch(
-      `${DRIVE_API_BASE}/files/${encodeURIComponent(cursor)}?fields=id,name,mimeType,parents`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-
-    if (!res.ok) break;
-    const item = (await res.json()) as {
-      id?: string;
-      name?: string;
-      mimeType?: string;
-      parents?: string[];
-    };
-
-    if (!item.id || !item.name) break;
-    trail.unshift({ id: item.id, name: item.name });
-    cursor = Array.isArray(item.parents) && item.parents.length > 0 ? item.parents[0] : undefined;
-  }
-
-  return trail;
-}
-
 const SAMPLE_DRIVE_FILES = [
   {
     name: 'untitled_export_04.txt',
@@ -445,9 +408,10 @@ Roast seasoned eggplant and chickpeas at 425°F for 25 minutes until caramelized
   },
 ];
 
-async function listDriveFilesPaginated(
+const FLAT_FILES_QUERY = "mimeType!='application/vnd.google-apps.folder' and trashed=false";
+
+async function listFlatDriveFiles(
   accessToken: string,
-  query: string,
   maxItems = 2000
 ): Promise<RawDriveFile[]> {
   const collected: RawDriveFile[] = [];
@@ -455,9 +419,9 @@ async function listDriveFilesPaginated(
 
   for (let page = 0; page < 10 && collected.length < maxItems; page += 1) {
     const params = new URLSearchParams({
-      q: query,
-      fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,parents)',
-      orderBy: 'folder,modifiedTime desc',
+      q: FLAT_FILES_QUERY,
+      fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)',
+      orderBy: 'modifiedTime desc',
       pageSize: '1000',
       supportsAllDrives: 'true',
       includeItemsFromAllDrives: 'true',
@@ -487,7 +451,22 @@ async function listDriveFilesPaginated(
     }
 
     if (Array.isArray(data.files)) {
-      collected.push(...data.files);
+      for (const item of data.files) {
+        if (
+          item.mimeType === FOLDER_MIME_TYPE ||
+          item.mimeType === SHORTCUT_MIME_TYPE ||
+          isExcludedExtensionName(item.name)
+        ) {
+          continue;
+        }
+        collected.push({
+          id: item.id,
+          name: item.name,
+          mimeType: item.mimeType,
+          ...(item.modifiedTime ? { modifiedTime: item.modifiedTime } : {}),
+          ...(item.webViewLink ? { webViewLink: item.webViewLink } : {}),
+        });
+      }
     }
 
     if (!data.nextPageToken) break;
@@ -495,115 +474,6 @@ async function listDriveFilesPaginated(
   }
 
   return collected;
-}
-
-function filterAndAnnotateDriveItems(rawItems: RawDriveFile[]): Array<RawDriveFile & { folderPath?: string }> {
-  const itemsById = new Map<string, RawDriveFile>();
-  for (const item of rawItems) {
-    if (item.mimeType !== SHORTCUT_MIME_TYPE) {
-      itemsById.set(item.id, item);
-    }
-  }
-
-  const exclusionCache = new Map<string, boolean>();
-  const isItemOrAncestorExcluded = (itemId: string, visited = new Set<string>()): boolean => {
-    const cached = exclusionCache.get(itemId);
-    if (cached !== undefined) return cached;
-    if (visited.has(itemId)) return false;
-
-    const item = itemsById.get(itemId);
-    if (!item) return false;
-    if (isExcludedExtensionName(item.name)) {
-      exclusionCache.set(itemId, true);
-      return true;
-    }
-
-    visited.add(itemId);
-    const parents = item.parents || [];
-    for (const parentId of parents) {
-      if (isItemOrAncestorExcluded(parentId, visited)) {
-        exclusionCache.set(itemId, true);
-        return true;
-      }
-    }
-
-    exclusionCache.set(itemId, false);
-    return false;
-  };
-
-  const resolvePath = (item: RawDriveFile): string | undefined => {
-    const parts: string[] = [];
-    const seen = new Set<string>([item.id]);
-    let cursor = item.parents?.[0];
-    for (let depth = 0; depth < 8 && cursor; depth += 1) {
-      if (seen.has(cursor)) break;
-      seen.add(cursor);
-      const parent = itemsById.get(cursor);
-      if (!parent) break;
-      parts.unshift(parent.name);
-      cursor = parent.parents?.[0];
-    }
-    return parts.length > 0 ? parts.join(' / ') : undefined;
-  };
-
-  const results: Array<RawDriveFile & { folderPath?: string }> = [];
-  for (const item of itemsById.values()) {
-    if (item.mimeType === FOLDER_MIME_TYPE) continue;
-    if (isItemOrAncestorExcluded(item.id)) continue;
-    results.push({
-      ...item,
-      folderPath: resolvePath(item),
-    });
-  }
-  return results;
-}
-
-async function collectAllDriveItemsRecursively(accessToken: string): Promise<Array<RawDriveFile & { folderPath?: string }>> {
-  const initialItems = await listDriveFilesPaginated(accessToken, 'trashed = false');
-  const itemsById = new Map<string, RawDriveFile>();
-  for (const item of initialItems) {
-    itemsById.set(item.id, item);
-  }
-
-  const queriedFolderIds = new Set<string>();
-
-  for (let depth = 0; depth < 8; depth += 1) {
-    const unqueriedFolders = Array.from(itemsById.values()).filter(
-      (item) =>
-        item.mimeType === FOLDER_MIME_TYPE &&
-        !isExcludedExtensionName(item.name) &&
-        !queriedFolderIds.has(item.id)
-    );
-
-    if (unqueriedFolders.length === 0) break;
-
-    let discoveredAnyNew = false;
-    const chunkSize = 20;
-    for (let i = 0; i < unqueriedFolders.length; i += chunkSize) {
-      const chunk = unqueriedFolders.slice(i, i + chunkSize);
-      for (const folder of chunk) {
-        queriedFolderIds.add(folder.id);
-      }
-
-      const parentQuery = chunk.map((folder) => `'${folder.id}' in parents`).join(' or ');
-      const children = await listDriveFilesPaginated(
-        accessToken,
-        `trashed = false and (${parentQuery})`,
-        1000
-      );
-
-      for (const child of children) {
-        if (!itemsById.has(child.id)) {
-          discoveredAnyNew = true;
-        }
-        itemsById.set(child.id, child);
-      }
-    }
-
-    if (!discoveredAnyNew) break;
-  }
-
-  return filterAndAnnotateDriveItems(Array.from(itemsById.values()));
 }
 
 async function startServer() {
@@ -614,8 +484,7 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // List any and all accessible Drive files across all folders & subfolders,
-  // excluding folders and files with .css, .js, .apsx (or .aspx) extensions
+  // Flat Google Drive file array: strips all folder trees and retains only id, name, mimeType, modifiedTime, webViewLink
   app.get('/api/drive/files', async (req: Request, res: Response) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -623,43 +492,9 @@ async function startServer() {
       return;
     }
 
-    const rawFolderId = typeof req.query.folderId === 'string' ? req.query.folderId.trim() : '';
-    if (rawFolderId && !/^[a-zA-Z0-9_-]+$/.test(rawFolderId)) {
-      res.status(400).json({ error: 'Invalid folderId parameter.' });
-      return;
-    }
-
     try {
-      if (rawFolderId) {
-        const [directChildren, breadcrumbs] = await Promise.all([
-          listDriveFilesPaginated(token, `trashed = false and '${rawFolderId}' in parents`),
-          resolveFolderBreadcrumbs(token, rawFolderId),
-        ]);
-
-        const hasExcludedAncestor = breadcrumbs.some((crumb) =>
-          isExcludedExtensionName(crumb.name)
-        );
-        if (hasExcludedAncestor) {
-          res.json({ files: [], breadcrumbs });
-          return;
-        }
-
-        const folderPath = breadcrumbs.map((b) => b.name).join(' / ') || undefined;
-        const filtered = directChildren
-          .filter(
-            (item) =>
-              item.mimeType !== FOLDER_MIME_TYPE &&
-              item.mimeType !== SHORTCUT_MIME_TYPE &&
-              !isExcludedExtensionName(item.name)
-          )
-          .map((item) => ({ ...item, folderPath }));
-
-        res.json({ files: filtered, breadcrumbs });
-        return;
-      }
-
-      const allItems = await collectAllDriveItemsRecursively(token);
-      res.json({ files: allItems, breadcrumbs: [] });
+      const flatFiles = await listFlatDriveFiles(token);
+      res.json(flatFiles);
     } catch (err) {
       const status =
         typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status?: unknown }).status === 'number'

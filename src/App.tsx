@@ -70,15 +70,6 @@ function isFolderItem(item: { mimeType: string }): boolean {
   return item.mimeType === FOLDER_MIME_TYPE;
 }
 
-function formatBytes(sizeStr?: string): string {
-  if (!sizeStr) return 'Google Doc';
-  const bytes = Number(sizeStr);
-  if (Number.isNaN(bytes) || bytes <= 0) return 'Google Doc';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function formatShortDate(iso?: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -188,26 +179,25 @@ export default function App() {
         const res = await fetch('/api/drive/files', {
           headers: { Authorization: `Bearer ${token}` },
         });
-        const data = (await res.json()) as {
-          files?: Array<{
-            id: string;
-            name: string;
-            mimeType: string;
-            modifiedTime?: string;
-            size?: string;
-            webViewLink?: string;
-            parents?: string[];
-            folderPath?: string;
-          }>;
-          error?: string;
-        };
+        const data = (await res.json()) as
+          | Array<{
+              id: string;
+              name: string;
+              mimeType: string;
+              modifiedTime?: string;
+              webViewLink?: string;
+            }>
+          | { error?: string };
 
         if (!res.ok) {
           if (res.status === 401) setNeedsAuth(true);
-          throw new Error(data.error || 'Failed to fetch Drive files.');
+          const errMessage =
+            !Array.isArray(data) && data.error ? data.error : 'Failed to fetch Drive files.';
+          throw new Error(errMessage);
         }
 
-        const fetched = (data.files || []).filter(
+        const rawList = Array.isArray(data) ? data : [];
+        const fetched = rawList.filter(
           (f) => !isFolderItem(f) && !isExcludedExtensionName(f.name)
         );
 
@@ -223,10 +213,7 @@ export default function App() {
               name: f.name,
               mimeType: f.mimeType,
               modifiedTime: f.modifiedTime,
-              size: f.size,
               webViewLink: f.webViewLink,
-              parents: f.parents,
-              folderPath: f.folderPath ?? existing.folderPath,
               selected: isSelected,
             };
           }
@@ -235,10 +222,7 @@ export default function App() {
             name: f.name,
             mimeType: f.mimeType,
             modifiedTime: f.modifiedTime,
-            size: f.size,
             webViewLink: f.webViewLink,
-            parents: f.parents,
-            folderPath: f.folderPath,
             status: 'unscanned',
             selected: isSelected,
           };
@@ -845,7 +829,6 @@ export default function App() {
       if (!q) return true;
       return (
         f.name.toLowerCase().includes(q) ||
-        (f.folderPath || '').toLowerCase().includes(q) ||
         (f.coreTopic || '').toLowerCase().includes(q) ||
         (f.category || '').toLowerCase().includes(q) ||
         (f.editedName || f.proposedName || '').toLowerCase().includes(q)
@@ -1687,7 +1670,6 @@ export default function App() {
                           (file.status === 'ready' || file.status === 'renamed') &&
                           formattedProposed.length > 0 &&
                           formattedProposed !== file.name;
-                        const parentFolderName = file.folderPath;
 
                         return (
                           <div key={file.id} className="space-y-3 px-4 py-4">
@@ -1711,17 +1693,7 @@ export default function App() {
                                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
                                     <span>{friendlyMimeLabel(file.mimeType)}</span>
                                     <span aria-hidden="true">·</span>
-                                    <span>{formatBytes(file.size)}</span>
-                                    <span aria-hidden="true">·</span>
                                     <span>{formatShortDate(file.modifiedTime)}</span>
-                                    {parentFolderName && (
-                                      <>
-                                        <span aria-hidden="true">·</span>
-                                        <span className="truncate text-slate-600">
-                                          in {parentFolderName}
-                                        </span>
-                                      </>
-                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -1899,7 +1871,6 @@ export default function App() {
                             (file.status === 'ready' || file.status === 'renamed') &&
                             formattedProposed.length > 0 &&
                             formattedProposed !== file.name;
-                          const parentFolderName = file.folderPath;
 
                           return (
                             <tr key={file.id} className="align-top hover:bg-slate-50/70">
@@ -1927,17 +1898,7 @@ export default function App() {
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
                                   <span>{friendlyMimeLabel(file.mimeType)}</span>
                                   <span aria-hidden="true">·</span>
-                                  <span>{formatBytes(file.size)}</span>
-                                  <span aria-hidden="true">·</span>
                                   <span>{formatShortDate(file.modifiedTime)}</span>
-                                  {parentFolderName && (
-                                    <>
-                                      <span aria-hidden="true">·</span>
-                                      <span className="truncate text-slate-600">
-                                        in {parentFolderName}
-                                      </span>
-                                    </>
-                                  )}
                                 </div>
                               </td>
 
