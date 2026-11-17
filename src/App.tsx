@@ -92,14 +92,22 @@ function formatShortDate(iso?: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function isExcludedExtensionName(name: string): boolean {
+  return /\.(css|js|apsx|aspx)$/i.test(name.trim());
+}
+
 function friendlyMimeLabel(mimeType: string): string {
   if (mimeType === FOLDER_MIME_TYPE) return 'Folder';
   if (mimeType === 'application/vnd.google-apps.document') return 'Google Doc';
+  if (mimeType === 'application/vnd.google-apps.spreadsheet') return 'Google Sheet';
+  if (mimeType === 'application/vnd.google-apps.presentation') return 'Google Slides';
+  if (mimeType === 'application/pdf') return 'PDF';
   if (mimeType === 'text/markdown' || mimeType === 'text/x-markdown') return 'Markdown';
   if (mimeType === 'text/csv') return 'CSV';
   if (mimeType === 'application/json') return 'JSON';
   if (mimeType === 'text/html') return 'HTML';
-  return 'Plain Text';
+  if (mimeType.startsWith('text/')) return 'Text';
+  return 'Drive File';
 }
 
 export default function App() {
@@ -212,6 +220,7 @@ export default function App() {
             size?: string;
             webViewLink?: string;
             parents?: string[];
+            folderPath?: string;
           }>;
           breadcrumbs?: DriveBreadcrumb[];
           error?: string;
@@ -222,7 +231,7 @@ export default function App() {
           throw new Error(data.error || 'Failed to fetch Drive files.');
         }
 
-        const fetched = data.files || [];
+        const fetched = (data.files || []).filter((f) => !isExcludedExtensionName(f.name));
         setBreadcrumbs(targetFolderId ? data.breadcrumbs || [] : []);
 
         const prevCache = knownFilesRef.current;
@@ -245,6 +254,7 @@ export default function App() {
               size: f.size,
               webViewLink: f.webViewLink,
               parents: f.parents,
+              folderPath: f.folderPath ?? existing.folderPath,
               selected: isSelected,
             };
           }
@@ -256,6 +266,7 @@ export default function App() {
             size: f.size,
             webViewLink: f.webViewLink,
             parents: f.parents,
+            folderPath: f.folderPath,
             status: 'unscanned',
             selected: isSelected,
           };
@@ -668,21 +679,16 @@ export default function App() {
     try {
       const result = await openGoogleDrivePicker(token);
       if (result.picked) {
-        if (result.docs.length === 1 && result.docs[0].mimeType === FOLDER_MIME_TYPE) {
-          await openFolder(result.docs[0].id);
-          setBannerNotice(`Opened Google Drive folder "${result.docs[0].name}".`);
-        } else {
-          for (const doc of result.docs) {
-            if (doc.mimeType !== FOLDER_MIME_TYPE) {
-              persistedSelectedIdsRef.current.add(doc.id);
-            }
+        for (const doc of result.docs) {
+          if (doc.mimeType !== FOLDER_MIME_TYPE && !isExcludedExtensionName(doc.name)) {
+            persistedSelectedIdsRef.current.add(doc.id);
           }
-          savePersistedSelectedIds(persistedSelectedIdsRef.current);
-          await loadDriveFiles(token, currentFolderId);
-          setBannerNotice(
-            `Authorized ${result.docs.length} ${result.docs.length === 1 ? 'item' : 'items'} from Google Drive.`
-          );
         }
+        savePersistedSelectedIds(persistedSelectedIdsRef.current);
+        await loadDriveFiles(token, viewMode === 'all' ? null : currentFolderId);
+        setBannerNotice(
+          `Authorized ${result.docs.length} ${result.docs.length === 1 ? 'item' : 'items'} from Google Drive and loaded nested files.`
+        );
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google Drive Picker is unavailable.';
@@ -2036,8 +2042,9 @@ export default function App() {
                           formattedProposed.length > 0 &&
                           formattedProposed !== file.name;
                         const parentFolderName =
-                          viewMode === 'all' && file.parents?.[0]
-                            ? folderNameById.get(file.parents[0])
+                          viewMode === 'all'
+                            ? file.folderPath ||
+                              (file.parents?.[0] ? folderNameById.get(file.parents[0]) : undefined)
                             : undefined;
 
                         return (
@@ -2319,8 +2326,9 @@ export default function App() {
                             formattedProposed.length > 0 &&
                             formattedProposed !== file.name;
                           const parentFolderName =
-                            viewMode === 'all' && file.parents?.[0]
-                              ? folderNameById.get(file.parents[0])
+                            viewMode === 'all'
+                              ? file.folderPath ||
+                                (file.parents?.[0] ? folderNameById.get(file.parents[0]) : undefined)
                               : undefined;
 
                           return (

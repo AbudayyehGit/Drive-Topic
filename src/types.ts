@@ -25,6 +25,7 @@ export interface DriveFileItem {
   size?: string;
   webViewLink?: string;
   parents?: string[];
+  folderPath?: string;
   status: FileRowStatus;
   snippet?: string;
   coreTopic?: string;

@@ -97,15 +97,38 @@ function formatFilename(
   return `${stem || 'Untitled Document'}${extension}`;
 }
 
+const EXCLUDED_EXTENSION_REGEX = /\.(css|js|apsx|aspx)$/i;
+const SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
+
+function isExcludedExtensionName(name: string): boolean {
+  return EXCLUDED_EXTENSION_REGEX.test(name.trim());
+}
+
+interface RawDriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  size?: string;
+  webViewLink?: string;
+  parents?: string[];
+}
+
 async function fetchDriveSnippet(
   accessToken: string,
   fileId: string,
   mimeType: string
 ): Promise<string> {
-  const isGoogleDoc = mimeType === 'application/vnd.google-apps.document';
-  const url = isGoogleDoc
-    ? `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/plain`
-    : `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`;
+  let url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media`;
+  if (mimeType === 'application/vnd.google-apps.document') {
+    url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/plain`;
+  } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+    url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/csv`;
+  } else if (mimeType === 'application/vnd.google-apps.presentation') {
+    url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}/export?mimeType=text/plain`;
+  } else if (mimeType.startsWith('application/vnd.google-apps.')) {
+    throw new Error(`Unsupported Google Workspace format (${mimeType}) for text extraction.`);
+  }
 
   const response = await fetch(url, {
     headers: {
@@ -422,6 +445,166 @@ Roast seasoned eggplant and chickpeas at 425°F for 25 minutes until caramelized
   },
 ];
 
+async function listDriveFilesPaginated(
+  accessToken: string,
+  query: string,
+  maxItems = 2000
+): Promise<RawDriveFile[]> {
+  const collected: RawDriveFile[] = [];
+  let pageToken: string | undefined;
+
+  for (let page = 0; page < 10 && collected.length < maxItems; page += 1) {
+    const params = new URLSearchParams({
+      q: query,
+      fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,parents)',
+      orderBy: 'folder,modifiedTime desc',
+      pageSize: '1000',
+      supportsAllDrives: 'true',
+      includeItemsFromAllDrives: 'true',
+    });
+    if (pageToken) {
+      params.set('pageToken', pageToken);
+    }
+
+    const driveRes = await fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    const data = (await driveRes.json()) as {
+      files?: RawDriveFile[];
+      nextPageToken?: string;
+      error?: { message?: string; code?: number };
+    };
+
+    if (!driveRes.ok) {
+      const error = new Error(data.error?.message || 'Failed to fetch files from Google Drive.') as Error & {
+        status?: number;
+      };
+      error.status = driveRes.status;
+      throw error;
+    }
+
+    if (Array.isArray(data.files)) {
+      collected.push(...data.files);
+    }
+
+    if (!data.nextPageToken) break;
+    pageToken = data.nextPageToken;
+  }
+
+  return collected;
+}
+
+function filterAndAnnotateDriveItems(rawItems: RawDriveFile[]): Array<RawDriveFile & { folderPath?: string }> {
+  const itemsById = new Map<string, RawDriveFile>();
+  for (const item of rawItems) {
+    if (item.mimeType !== SHORTCUT_MIME_TYPE) {
+      itemsById.set(item.id, item);
+    }
+  }
+
+  const exclusionCache = new Map<string, boolean>();
+  const isItemOrAncestorExcluded = (itemId: string, visited = new Set<string>()): boolean => {
+    const cached = exclusionCache.get(itemId);
+    if (cached !== undefined) return cached;
+    if (visited.has(itemId)) return false;
+
+    const item = itemsById.get(itemId);
+    if (!item) return false;
+    if (isExcludedExtensionName(item.name)) {
+      exclusionCache.set(itemId, true);
+      return true;
+    }
+
+    visited.add(itemId);
+    const parents = item.parents || [];
+    for (const parentId of parents) {
+      if (isItemOrAncestorExcluded(parentId, visited)) {
+        exclusionCache.set(itemId, true);
+        return true;
+      }
+    }
+
+    exclusionCache.set(itemId, false);
+    return false;
+  };
+
+  const resolvePath = (item: RawDriveFile): string | undefined => {
+    const parts: string[] = [];
+    const seen = new Set<string>([item.id]);
+    let cursor = item.parents?.[0];
+    for (let depth = 0; depth < 8 && cursor; depth += 1) {
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      const parent = itemsById.get(cursor);
+      if (!parent) break;
+      parts.unshift(parent.name);
+      cursor = parent.parents?.[0];
+    }
+    return parts.length > 0 ? parts.join(' / ') : undefined;
+  };
+
+  const results: Array<RawDriveFile & { folderPath?: string }> = [];
+  for (const item of itemsById.values()) {
+    if (isItemOrAncestorExcluded(item.id)) continue;
+    results.push({
+      ...item,
+      folderPath: resolvePath(item),
+    });
+  }
+  return results;
+}
+
+async function collectAllDriveItemsRecursively(accessToken: string): Promise<Array<RawDriveFile & { folderPath?: string }>> {
+  const initialItems = await listDriveFilesPaginated(accessToken, 'trashed = false');
+  const itemsById = new Map<string, RawDriveFile>();
+  for (const item of initialItems) {
+    itemsById.set(item.id, item);
+  }
+
+  const queriedFolderIds = new Set<string>();
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    const unqueriedFolders = Array.from(itemsById.values()).filter(
+      (item) =>
+        item.mimeType === FOLDER_MIME_TYPE &&
+        !isExcludedExtensionName(item.name) &&
+        !queriedFolderIds.has(item.id)
+    );
+
+    if (unqueriedFolders.length === 0) break;
+
+    let discoveredAnyNew = false;
+    const chunkSize = 20;
+    for (let i = 0; i < unqueriedFolders.length; i += chunkSize) {
+      const chunk = unqueriedFolders.slice(i, i + chunkSize);
+      for (const folder of chunk) {
+        queriedFolderIds.add(folder.id);
+      }
+
+      const parentQuery = chunk.map((folder) => `'${folder.id}' in parents`).join(' or ');
+      const children = await listDriveFilesPaginated(
+        accessToken,
+        `trashed = false and (${parentQuery})`,
+        1000
+      );
+
+      for (const child of children) {
+        if (!itemsById.has(child.id)) {
+          discoveredAnyNew = true;
+        }
+        itemsById.set(child.id, child);
+      }
+    }
+
+    if (!discoveredAnyNew) break;
+  }
+
+  return filterAndAnnotateDriveItems(Array.from(itemsById.values()));
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
@@ -430,7 +613,8 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // List folders, subfolders, and text/Google Doc files accessible via Google Drive API
+  // List any and all accessible Drive files across all folders & subfolders,
+  // excluding folders and files with .css, .js, .apsx (or .aspx) extensions
   app.get('/api/drive/files', async (req: Request, res: Response) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -445,51 +629,38 @@ async function startServer() {
     }
 
     try {
-      const mimeQuery = [FOLDER_MIME_TYPE, ...SUPPORTED_MIME_TYPES]
-        .map((m) => `mimeType='${m}'`)
-        .join(' or ');
-      const parentClause = rawFolderId ? ` and '${rawFolderId}' in parents` : '';
-      const q = `trashed = false${parentClause} and (${mimeQuery})`;
-      const params = new URLSearchParams({
-        q,
-        fields: 'files(id,name,mimeType,modifiedTime,size,webViewLink,parents)',
-        orderBy: 'folder,modifiedTime desc',
-        pageSize: '100',
-      });
+      if (rawFolderId) {
+        const [directChildren, breadcrumbs] = await Promise.all([
+          listDriveFilesPaginated(token, `trashed = false and '${rawFolderId}' in parents`),
+          resolveFolderBreadcrumbs(token, rawFolderId),
+        ]);
 
-      const [driveRes, breadcrumbs] = await Promise.all([
-        fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }),
-        rawFolderId ? resolveFolderBreadcrumbs(token, rawFolderId) : Promise.resolve([]),
-      ]);
+        const hasExcludedAncestor = breadcrumbs.some((crumb) =>
+          isExcludedExtensionName(crumb.name)
+        );
+        if (hasExcludedAncestor) {
+          res.json({ files: [], breadcrumbs });
+          return;
+        }
 
-      const data = (await driveRes.json()) as {
-        files?: Array<{
-          id: string;
-          name: string;
-          mimeType: string;
-          modifiedTime?: string;
-          size?: string;
-          webViewLink?: string;
-          parents?: string[];
-        }>;
-        error?: { message?: string; code?: number };
-      };
+        const folderPath = breadcrumbs.map((b) => b.name).join(' / ') || undefined;
+        const filtered = directChildren
+          .filter((item) => item.mimeType !== SHORTCUT_MIME_TYPE && !isExcludedExtensionName(item.name))
+          .map((item) => ({ ...item, folderPath }));
 
-      if (!driveRes.ok) {
-        res.status(driveRes.status).json({
-          error: data.error?.message || 'Failed to fetch files from Google Drive.',
-        });
+        res.json({ files: filtered, breadcrumbs });
         return;
       }
 
-      res.json({ files: data.files || [], breadcrumbs });
+      const allItems = await collectAllDriveItemsRecursively(token);
+      res.json({ files: allItems, breadcrumbs: [] });
     } catch (err) {
+      const status =
+        typeof err === 'object' && err !== null && 'status' in err && typeof (err as { status?: unknown }).status === 'number'
+          ? (err as { status: number }).status
+          : 500;
       const message = err instanceof Error ? err.message : 'Failed to communicate with Google Drive.';
-      res.status(500).json({ error: message });
+      res.status(status).json({ error: message });
     }
   });
 

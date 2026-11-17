@@ -504,9 +504,6 @@ export async function openGoogleDrivePicker(
     if (typeof docsView.setSelectFolderEnabled === 'function') {
       docsView.setSelectFolderEnabled(true);
     }
-    docsView.setMimeTypes(
-      'application/vnd.google-apps.folder,application/vnd.google-apps.document,text/plain,text/markdown,text/csv,application/json,text/html'
-    );
 
     const builder = new pickerApi.PickerBuilder();
     builder.addView(docsView);
