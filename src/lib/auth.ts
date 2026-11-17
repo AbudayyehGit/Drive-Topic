@@ -504,9 +504,10 @@ export async function openGoogleDrivePicker(
     if (pickerApi.DocsViewMode?.LIST && typeof docsView.setMode === 'function') {
       docsView.setMode(pickerApi.DocsViewMode.LIST);
     }
-    docsView.setIncludeFolders(true);
+    // Flatten Picker view: hide all folders and show all files (inside folders and in root)
+    docsView.setIncludeFolders(false);
     if (typeof docsView.setSelectFolderEnabled === 'function') {
-      docsView.setSelectFolderEnabled(true);
+      docsView.setSelectFolderEnabled(false);
     }
 
     const builder = new pickerApi.PickerBuilder();

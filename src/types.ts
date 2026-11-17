@@ -21,6 +21,7 @@ export interface DriveFileItem {
   id: string;
   name: string;
   mimeType: string;
+  createdTime?: string;
   modifiedTime?: string;
   size?: string;
   webViewLink?: string;

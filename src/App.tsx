@@ -41,6 +41,7 @@ import { SelectionOverviewCard } from './components/SelectionOverviewCard';
 import { TopicSummaryChart } from './components/TopicSummaryChart';
 import { TriStateCheckbox } from './components/TriStateCheckbox';
 import { ProposedFilenameInput } from './components/ProposedFilenameInput';
+import { DrivePickerModal } from './components/DrivePickerModal';
 
 const AUDIT_STORAGE_KEY = 'drivetopic_audit_log_v1';
 const SELECTED_IDS_STORAGE_KEY = 'drivetopic_selected_ids_v1';
@@ -119,6 +120,7 @@ export default function App() {
   const [bannerNotice, setBannerNotice] = useState<string | null>(null);
 
   const [inspectedFileId, setInspectedFileId] = useState<string | null>(null);
+  const [isDrivePickerOpen, setIsDrivePickerOpen] = useState(false);
   const [pendingRenameTargets, setPendingRenameTargets] = useState<RenameTarget[]>([]);
   const [isExecutingRename, setIsExecutingRename] = useState(false);
 
@@ -184,6 +186,7 @@ export default function App() {
               id: string;
               name: string;
               mimeType: string;
+              createdTime?: string;
               modifiedTime?: string;
               webViewLink?: string;
             }>
@@ -203,30 +206,39 @@ export default function App() {
 
         const prevCache = knownFilesRef.current;
         const selectedSet = persistedSelectedIdsRef.current;
-        const mergedItems: DriveFileItem[] = fetched.map((f) => {
-          const existing = prevCache[f.id];
-          const isSelected = existing ? Boolean(existing.selected) : selectedSet.has(f.id);
+        const mergedItems: DriveFileItem[] = fetched
+          .map((f) => {
+            const existing = prevCache[f.id];
+            const isSelected = existing ? Boolean(existing.selected) : selectedSet.has(f.id);
 
-          if (existing) {
+            if (existing) {
+              return {
+                ...existing,
+                name: f.name,
+                mimeType: f.mimeType,
+                createdTime: f.createdTime ?? existing.createdTime,
+                modifiedTime: f.modifiedTime,
+                webViewLink: f.webViewLink,
+                selected: isSelected,
+              };
+            }
             return {
-              ...existing,
+              id: f.id,
               name: f.name,
               mimeType: f.mimeType,
+              createdTime: f.createdTime,
               modifiedTime: f.modifiedTime,
               webViewLink: f.webViewLink,
+              status: 'unscanned' as const,
               selected: isSelected,
             };
-          }
-          return {
-            id: f.id,
-            name: f.name,
-            mimeType: f.mimeType,
-            modifiedTime: f.modifiedTime,
-            webViewLink: f.webViewLink,
-            status: 'unscanned',
-            selected: isSelected,
-          };
-        });
+          })
+          .sort((a, b) => {
+            const aTime = Date.parse(a.createdTime || a.modifiedTime || '') || 0;
+            const bTime = Date.parse(b.createdTime || b.modifiedTime || '') || 0;
+            if (aTime !== bTime) return aTime - bTime;
+            return a.name.localeCompare(b.name);
+          });
 
         const nextKnown: Record<string, DriveFileItem> = {};
         for (const item of mergedItems) {
@@ -548,7 +560,14 @@ export default function App() {
     }
   };
 
-  const handleOpenPicker = async () => {
+  const handleOpenPicker = () => {
+    const token = requireToken();
+    if (!token) return;
+    setBannerError(null);
+    setIsDrivePickerOpen(true);
+  };
+
+  const handleLaunchGooglePicker = async () => {
     const token = requireToken();
     if (!token) return;
 
@@ -564,7 +583,7 @@ export default function App() {
         savePersistedSelectedIds(persistedSelectedIdsRef.current);
         await loadDriveFiles(token);
         setBannerNotice(
-          `Authorized ${result.docs.length} ${result.docs.length === 1 ? 'item' : 'items'} from Google Drive and loaded nested files.`
+          `Authorized ${result.docs.length} ${result.docs.length === 1 ? 'file' : 'files'} from Google Drive.`
         );
       }
     } catch (err) {
@@ -573,6 +592,23 @@ export default function App() {
         `${msg} You can upload local text files or create sample Drive files directly below.`
       );
     }
+  };
+
+  const handleApplyPickerSelection = (selectedIds: Set<string>) => {
+    persistedSelectedIdsRef.current = new Set(selectedIds);
+    savePersistedSelectedIds(persistedSelectedIdsRef.current);
+
+    setFiles((prev) =>
+      prev.map((f) => ({ ...f, selected: selectedIds.has(f.id) }))
+    );
+    setKnownFilesById((prev) => {
+      const next: Record<string, DriveFileItem> = {};
+      for (const [id, item] of Object.entries(prev)) {
+        next[id] = { ...item, selected: selectedIds.has(id) };
+      }
+      knownFilesRef.current = next;
+      return next;
+    });
   };
 
   // Trigger confirmation modal for single file rename
@@ -814,26 +850,33 @@ export default function App() {
 
   const filteredFiles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return documentFiles.filter((f) => {
-      if (selectedCategory !== null) {
-        const itemCategory = (f.category || f.coreTopic || '').trim();
-        if (itemCategory !== selectedCategory) return false;
-      }
+    return documentFiles
+      .filter((f) => {
+        if (selectedCategory !== null) {
+          const itemCategory = (f.category || f.coreTopic || '').trim();
+          if (itemCategory !== selectedCategory) return false;
+        }
 
-      if (statusFilter !== 'all') {
-        if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
-        if (statusFilter === 'ready' && f.status !== 'ready') return false;
-        if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
-      }
+        if (statusFilter !== 'all') {
+          if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
+          if (statusFilter === 'ready' && f.status !== 'ready') return false;
+          if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
+        }
 
-      if (!q) return true;
-      return (
-        f.name.toLowerCase().includes(q) ||
-        (f.coreTopic || '').toLowerCase().includes(q) ||
-        (f.category || '').toLowerCase().includes(q) ||
-        (f.editedName || f.proposedName || '').toLowerCase().includes(q)
-      );
-    });
+        if (!q) return true;
+        return (
+          f.name.toLowerCase().includes(q) ||
+          (f.coreTopic || '').toLowerCase().includes(q) ||
+          (f.category || '').toLowerCase().includes(q) ||
+          (f.editedName || f.proposedName || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const aTime = Date.parse(a.createdTime || a.modifiedTime || '') || 0;
+        const bTime = Date.parse(b.createdTime || b.modifiedTime || '') || 0;
+        if (aTime !== bTime) return aTime - bTime;
+        return a.name.localeCompare(b.name);
+      });
   }, [documentFiles, searchQuery, selectedCategory, statusFilter]);
 
   const selectableVisibleDocs = filteredFiles;
@@ -974,6 +1017,7 @@ export default function App() {
         activeTab !== 'workspace' ||
         needsAuth ||
         inspectedFileId !== null ||
+        isDrivePickerOpen ||
         pendingRenameTargets.length > 0
       ) {
         return;
@@ -1014,6 +1058,7 @@ export default function App() {
     activeTab,
     needsAuth,
     inspectedFileId,
+    isDrivePickerOpen,
     pendingRenameTargets.length,
     selectableVisibleDocs.length,
     selectAllDocumentsInScope,
@@ -1552,12 +1597,12 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Flattened All-Files Batch Bar (folders omitted, nested files included) */}
+              {/* Flattened All-Files Batch Bar (folders omitted, earliest-to-latest creation sort) */}
               <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                 <span className="text-xs text-slate-600 tabular-nums">
                   Showing {selectableVisibleDocs.length}{' '}
                   {selectableVisibleDocs.length === 1 ? 'file' : 'files'} across all folders and subfolders
-                  {selectedCategory ? ` in "${selectedCategory}"` : ''}
+                  {selectedCategory ? ` in "${selectedCategory}"` : ''} · Sorted earliest → latest created
                 </span>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1604,7 +1649,7 @@ export default function App() {
                   <p className="mx-auto mt-1.5 max-w-lg text-sm text-slate-600">
                     Because DriveTopic uses the least-privilege{' '}
                     <span className="font-mono text-xs text-slate-800">drive.file</span> scope, it
-                    only sees files and folders you select, upload, or create with this app.
+                    only sees files you select, upload, or create with this app.
                   </p>
                   <div className="mt-6 flex flex-col items-stretch justify-center gap-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                     <button
@@ -1699,7 +1744,9 @@ export default function App() {
                                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
                                     <span>{friendlyMimeLabel(file.mimeType)}</span>
                                     <span aria-hidden="true">·</span>
-                                    <span>{formatShortDate(file.modifiedTime)}</span>
+                                    <span>
+                                      Created {formatShortDate(file.createdTime || file.modifiedTime)}
+                                    </span>
                                   </div>
                                 </div>
                               </div>
@@ -1904,7 +1951,9 @@ export default function App() {
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 tabular-nums">
                                   <span>{friendlyMimeLabel(file.mimeType)}</span>
                                   <span aria-hidden="true">·</span>
-                                  <span>{formatShortDate(file.modifiedTime)}</span>
+                                  <span>
+                                    Created {formatShortDate(file.createdTime || file.modifiedTime)}
+                                  </span>
                                 </div>
                               </td>
 
@@ -2070,6 +2119,16 @@ export default function App() {
           setInspectedFileId(null);
           requestSingleRename(file);
         }}
+      />
+
+      <DrivePickerModal
+        isOpen={isDrivePickerOpen}
+        files={documentFiles}
+        isLoading={isLoadingFiles}
+        onRefresh={() => loadDriveFiles()}
+        onLaunchExternalPicker={handleLaunchGooglePicker}
+        onApplySelection={handleApplyPickerSelection}
+        onClose={() => setIsDrivePickerOpen(false)}
       />
 
       <RenameConfirmModal

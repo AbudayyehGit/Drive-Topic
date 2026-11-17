@@ -123,6 +123,7 @@ interface RawDriveFile {
   id: string;
   name: string;
   mimeType: string;
+  createdTime?: string;
   modifiedTime?: string;
   webViewLink?: string;
 }
@@ -327,7 +328,7 @@ async function createMultipartDriveFile(
     `--${boundary}--`;
 
   const response = await fetch(
-    `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,modifiedTime,webViewLink`,
+    `${DRIVE_UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,createdTime,modifiedTime,webViewLink`,
     {
       method: 'POST',
       headers: {
@@ -464,8 +465,8 @@ async function listFlatDriveFiles(
   for (let page = 0; page < 10 && collected.length < maxItems; page += 1) {
     const params = new URLSearchParams({
       q: FLAT_FILES_QUERY,
-      fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)',
-      orderBy: 'modifiedTime desc',
+      fields: 'nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,webViewLink)',
+      orderBy: 'createdTime',
       pageSize: '1000',
       supportsAllDrives: 'true',
       includeItemsFromAllDrives: 'true',
@@ -507,6 +508,7 @@ async function listFlatDriveFiles(
           id: item.id,
           name: item.name,
           mimeType: item.mimeType,
+          ...(item.createdTime ? { createdTime: item.createdTime } : {}),
           ...(item.modifiedTime ? { modifiedTime: item.modifiedTime } : {}),
           ...(item.webViewLink ? { webViewLink: item.webViewLink } : {}),
         });
@@ -516,6 +518,14 @@ async function listFlatDriveFiles(
     if (!data.nextPageToken) break;
     pageToken = data.nextPageToken;
   }
+
+  // Ensure deterministic ascending creation date order (earliest to latest)
+  collected.sort((a, b) => {
+    const aTime = Date.parse(a.createdTime || a.modifiedTime || '') || 0;
+    const bTime = Date.parse(b.createdTime || b.modifiedTime || '') || 0;
+    if (aTime !== bTime) return aTime - bTime;
+    return a.name.localeCompare(b.name);
+  });
 
   return collected;
 }
@@ -678,7 +688,7 @@ async function startServer() {
 
     try {
       const driveRes = await fetch(
-        `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,modifiedTime,webViewLink`,
+        `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,createdTime,modifiedTime,webViewLink`,
         {
           method: 'PATCH',
           headers: {
@@ -693,6 +703,7 @@ async function startServer() {
         id?: string;
         name?: string;
         mimeType?: string;
+        createdTime?: string;
         modifiedTime?: string;
         webViewLink?: string;
         error?: { message?: string };
