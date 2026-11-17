@@ -2,6 +2,14 @@ export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 export type NamingStyle = 'title-case' | 'kebab-case' | 'snake_case';
 
+export type DriveSortOption =
+  | 'created-asc'
+  | 'created-desc'
+  | 'modified-desc'
+  | 'modified-asc'
+  | 'name-asc'
+  | 'name-desc';
+
 export type FileRowStatus =
   | 'unscanned'
   | 'analyzing'

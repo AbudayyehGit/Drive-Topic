@@ -112,10 +112,19 @@ function formatFilename(
   return `${stem || 'Untitled Document'}${extension}`;
 }
 
-const EXCLUDED_EXTENSION_REGEX = /\.(css|js|apsx|aspx)$/i;
+const EXCLUDED_EXTENSION_REGEX = /\.(css|js)$/i;
 const SHORTCUT_MIME_TYPE = 'application/vnd.google-apps.shortcut';
 
-function isExcludedExtensionName(name: string): boolean {
+function isExcludedExtensionName(name: string, mimeType = ''): boolean {
+  const lowerMime = mimeType.trim().toLowerCase();
+  if (
+    lowerMime === 'text/css' ||
+    lowerMime === 'text/javascript' ||
+    lowerMime === 'application/javascript' ||
+    lowerMime === 'application/x-javascript'
+  ) {
+    return true;
+  }
   return EXCLUDED_EXTENSION_REGEX.test(name.trim());
 }
 
@@ -500,7 +509,7 @@ async function listFlatDriveFiles(
         if (
           item.mimeType === FOLDER_MIME_TYPE ||
           item.mimeType === SHORTCUT_MIME_TYPE ||
-          isExcludedExtensionName(item.name)
+          isExcludedExtensionName(item.name, item.mimeType)
         ) {
           continue;
         }

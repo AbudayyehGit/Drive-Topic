@@ -1,29 +1,44 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowUpNarrowWide,
+  ArrowUpDown,
   Check,
   ExternalLink,
   FileText,
   FolderOpen,
   Loader2,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   X,
 } from 'lucide-react';
-import type { DriveFileItem } from '../types';
+import type { DriveFileItem, DriveSortOption } from '../types';
+import {
+  CORE_EXCLUDED_EXTENSIONS,
+  DRIVE_SORT_OPTIONS,
+  isExcludedFile,
+  parseExtensionInput,
+  sortDriveFiles,
+} from '../lib/driveUtils';
 import { TriStateCheckbox } from './TriStateCheckbox';
 
 interface DrivePickerModalProps {
   isOpen: boolean;
   files: DriveFileItem[];
   isLoading: boolean;
+  sortOption: DriveSortOption;
+  onSortChange: (nextSort: DriveSortOption) => void;
+  excludedExtensions: string[];
+  onAddExcludedExtensions: (exts: string[]) => void;
+  onRemoveExcludedExtension: (ext: string) => void;
+  onResetExcludedExtensions: () => void;
   onRefresh: () => Promise<void>;
   onLaunchExternalPicker: () => Promise<void>;
   onApplySelection: (selectedIds: Set<string>) => void;
   onClose: () => void;
 }
 
-function formatCreationDate(iso?: string): string {
+function formatDateLabel(iso?: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
@@ -51,32 +66,42 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   isOpen,
   files,
   isLoading,
+  sortOption,
+  onSortChange,
+  excludedExtensions,
+  onAddExcludedExtensions,
+  onRemoveExcludedExtension,
+  onResetExcludedExtensions,
   onRefresh,
   onLaunchExternalPicker,
   onApplySelection,
   onClose,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [extensionInput, setExtensionInput] = useState('');
   const [draftSelectedIds, setDraftSelectedIds] = useState<Set<string>>(new Set());
   const [isOpeningGooglePicker, setIsOpeningGooglePicker] = useState(false);
 
-  // Sync draft selection whenever modal opens or underlying file list updates
+  // Reset to initial oldest-to-newest creation sort whenever the modal opens fresh?
+  // Note: App holds sortOption initialized to 'created-asc' so initial sort is always oldest -> newest,
+  // and user-chosen sort persists while switching views.
   useEffect(() => {
     if (!isOpen) return;
     setDraftSelectedIds(new Set(files.filter((f) => Boolean(f.selected)).map((f) => f.id)));
   }, [isOpen, files]);
 
+  const eligibleFlatFiles = useMemo(
+    () => files.filter((f) => !isExcludedFile(f.name, f.mimeType, excludedExtensions)),
+    [files, excludedExtensions]
+  );
+
   const sortedFlatFiles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return [...files]
-      .sort((a, b) => {
-        const aTime = Date.parse(a.createdTime || a.modifiedTime || '') || 0;
-        const bTime = Date.parse(b.createdTime || b.modifiedTime || '') || 0;
-        if (aTime !== bTime) return aTime - bTime;
-        return a.name.localeCompare(b.name);
-      })
-      .filter((f) => (!q ? true : f.name.toLowerCase().includes(q)));
-  }, [files, searchQuery]);
+    const filtered = eligibleFlatFiles.filter((f) =>
+      !q ? true : f.name.toLowerCase().includes(q)
+    );
+    return sortDriveFiles(filtered, sortOption);
+  }, [eligibleFlatFiles, searchQuery, sortOption]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -91,8 +116,12 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
         const tag = target?.tagName?.toLowerCase();
         const inputType = tag === 'input' ? (target as HTMLInputElement).type : '';
         const isTextInput =
-          (tag === 'input' && inputType !== 'checkbox' && inputType !== 'button' && inputType !== 'submit') ||
-          tag === 'textarea';
+          (tag === 'input' &&
+            inputType !== 'checkbox' &&
+            inputType !== 'button' &&
+            inputType !== 'submit') ||
+          tag === 'textarea' ||
+          tag === 'select';
         if (isTextInput || sortedFlatFiles.length === 0) return;
         e.preventDefault();
         setDraftSelectedIds((prev) => {
@@ -109,6 +138,11 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   const visibleSelectedCount = useMemo(
     () => sortedFlatFiles.filter((f) => draftSelectedIds.has(f.id)).length,
     [sortedFlatFiles, draftSelectedIds]
+  );
+
+  const eligibleSelectedCount = useMemo(
+    () => eligibleFlatFiles.filter((f) => draftSelectedIds.has(f.id)).length,
+    [eligibleFlatFiles, draftSelectedIds]
   );
 
   const allVisibleSelected =
@@ -143,6 +177,14 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
     });
   };
 
+  const handleAddExtensionsSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = parseExtensionInput(extensionInput);
+    if (parsed.length === 0) return;
+    onAddExcludedExtensions(parsed);
+    setExtensionInput('');
+  };
+
   const handleAuthorizeMore = async () => {
     setIsOpeningGooglePicker(true);
     try {
@@ -153,9 +195,15 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
   };
 
   const handleConfirm = () => {
-    onApplySelection(draftSelectedIds);
+    const eligibleIdSet = new Set(eligibleFlatFiles.map((f) => f.id));
+    const prunedSelection = new Set(
+      Array.from(draftSelectedIds).filter((id) => eligibleIdSet.has(id))
+    );
+    onApplySelection(prunedSelection);
     onClose();
   };
+
+  const hiddenCount = files.length - eligibleFlatFiles.length;
 
   return (
     <div
@@ -164,7 +212,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
       aria-modal="true"
       aria-labelledby="drive-picker-modal-title"
     >
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
+      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
         {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 sm:px-6">
           <div className="min-w-0">
@@ -175,8 +223,10 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               Google Drive — Flat File Selector
             </h2>
             <p className="mt-0.5 text-xs text-slate-600 sm:text-sm">
-              All accessible files across folders and root in a flat list, sorted earliest to latest
-              creation date.
+              Displays all accessible Drive files flattened (no folders), excluding{' '}
+              <span className="font-mono text-xs text-slate-800">.js</span>,{' '}
+              <span className="font-mono text-xs text-slate-800">.css</span>, and custom excluded
+              types.
             </p>
           </div>
           <button
@@ -189,9 +239,9 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
           </button>
         </div>
 
-        {/* Toolbar */}
-        <div className="flex flex-col gap-2.5 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <div className="relative flex-1 sm:max-w-xs">
+        {/* Search & Sort Toolbar */}
+        <div className="flex flex-col gap-2.5 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-6">
+          <div className="relative flex-1 sm:min-w-[190px] sm:max-w-xs">
             <Search
               className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
               aria-hidden="true"
@@ -206,10 +256,27 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 whitespace-nowrap">
-              <ArrowUpNarrowWide className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
-              <span>Creation Date: Earliest → Latest</span>
-            </span>
+            <div className="flex items-center gap-1.5">
+              <label
+                htmlFor="picker-sort-select"
+                className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 whitespace-nowrap"
+              >
+                <ArrowUpDown className="h-3.5 w-3.5 text-blue-600" aria-hidden="true" />
+                <span>Sort</span>
+              </label>
+              <select
+                id="picker-sort-select"
+                value={sortOption}
+                onChange={(e) => onSortChange(e.target.value as DriveSortOption)}
+                className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-800 focus:border-blue-600 focus:outline-none"
+              >
+                {DRIVE_SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <button
               type="button"
@@ -235,13 +302,77 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               ) : (
                 <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
               )}
-              <span>Authorize More in Google Drive</span>
+              <span>Authorize More</span>
             </button>
           </div>
         </div>
 
+        {/* Excluded File Types Bar */}
+        <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/50 px-4 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:px-6">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-medium text-slate-600">Excluded types:</span>
+            {excludedExtensions.map((ext) => {
+              const isCore = CORE_EXCLUDED_EXTENSIONS.has(ext);
+              return (
+                <span
+                  key={ext}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-0.5 font-mono text-xs text-slate-700"
+                >
+                  <span>{ext}</span>
+                  {!isCore && (
+                    <button
+                      type="button"
+                      onClick={() => onRemoveExcludedExtension(ext)}
+                      aria-label={`Stop excluding ${ext} files`}
+                      className="text-slate-400 hover:text-red-600"
+                    >
+                      <X className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+            {hiddenCount > 0 && (
+              <span className="text-xs text-slate-500 tabular-nums">
+                ({hiddenCount} excluded)
+              </span>
+            )}
+          </div>
+
+          <form
+            onSubmit={handleAddExtensionsSubmit}
+            className="flex flex-wrap items-center gap-1.5"
+          >
+            <input
+              type="text"
+              value={extensionInput}
+              onChange={(e) => setExtensionInput(e.target.value)}
+              placeholder="Exclude ext (e.g. .log, .tmp)"
+              aria-label="Exclude file extensions"
+              className="h-7 w-44 rounded-md border border-slate-300 bg-white px-2 font-mono text-xs text-slate-900 placeholder:font-sans placeholder:text-slate-400 focus:border-blue-600 focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={parseExtensionInput(extensionInput).length === 0}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-slate-300 bg-white px-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-45 whitespace-nowrap"
+            >
+              <Plus className="h-3 w-3" aria-hidden="true" />
+              <span>Exclude</span>
+            </button>
+            <button
+              type="button"
+              onClick={onResetExcludedExtensions}
+              title="Reset excluded types to defaults (.js, .css, .apsx, .aspx)"
+              className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-slate-500 hover:bg-slate-200/60 hover:text-slate-800 whitespace-nowrap"
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />
+              <span>Reset</span>
+            </button>
+          </form>
+        </div>
+
         {/* Persistent Checkbox List Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5 sm:px-6">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-2 sm:px-6">
           <TriStateCheckbox
             totalCount={sortedFlatFiles.length}
             selectedCount={visibleSelectedCount}
@@ -252,7 +383,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
 
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-500 tabular-nums">
-              {draftSelectedIds.size} of {files.length} total selected
+              {eligibleSelectedCount} of {eligibleFlatFiles.length} selected
             </span>
             {sortedFlatFiles.length > 0 && (
               <button
@@ -277,13 +408,13 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
             <div className="px-6 py-12 text-center">
               <FileText className="mx-auto h-7 w-7 text-slate-400" aria-hidden="true" />
               <p className="mt-2 text-sm font-medium text-slate-900">
-                {files.length === 0
-                  ? 'No authorized Drive files found yet'
+                {eligibleFlatFiles.length === 0
+                  ? 'No matching Drive files found'
                   : 'No filenames match your search'}
               </p>
               <p className="mt-1 text-xs text-slate-500">
-                {files.length === 0
-                  ? 'Click "Authorize More in Google Drive" above to pick files from your Google Drive.'
+                {eligibleFlatFiles.length === 0
+                  ? 'Click "Authorize More" to pick files from Google Drive or adjust your excluded extensions.'
                   : 'Clear the search filter to view all files.'}
               </p>
             </div>
@@ -291,6 +422,8 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
             <ul className="divide-y divide-slate-200">
               {sortedFlatFiles.map((file) => {
                 const isChecked = draftSelectedIds.has(file.id);
+                const isModifiedSort =
+                  sortOption === 'modified-asc' || sortOption === 'modified-desc';
                 return (
                   <li
                     key={file.id}
@@ -314,8 +447,14 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
                           <span>{friendlyFileType(file.mimeType)}</span>
                           <span aria-hidden="true">·</span>
                           <span>
-                            Created {formatCreationDate(file.createdTime || file.modifiedTime)}
+                            Created {formatDateLabel(file.createdTime || file.modifiedTime)}
                           </span>
+                          {isModifiedSort && file.modifiedTime && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span>Modified {formatDateLabel(file.modifiedTime)}</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </label>
@@ -341,7 +480,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
         {/* Footer */}
         <div className="flex flex-col-reverse gap-2.5 border-t border-slate-200 bg-slate-50 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <span className="text-center text-xs text-slate-600 tabular-nums sm:text-left">
-            {draftSelectedIds.size} {draftSelectedIds.size === 1 ? 'file' : 'files'} checked
+            {eligibleSelectedCount} {eligibleSelectedCount === 1 ? 'file' : 'files'} checked
           </span>
           <div className="grid grid-cols-2 gap-2.5 sm:flex sm:items-center sm:gap-3">
             <button
@@ -357,7 +496,7 @@ export const DrivePickerModal: React.FC<DrivePickerModalProps> = ({
               className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 whitespace-nowrap sm:h-9"
             >
               <Check className="h-4 w-4" aria-hidden="true" />
-              <span>Apply Selection ({draftSelectedIds.size})</span>
+              <span>Apply Selection ({eligibleSelectedCount})</span>
             </button>
           </div>
         </div>

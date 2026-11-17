@@ -26,12 +26,21 @@ import {
 import {
   type AnalyzeResponseItem,
   type DriveFileItem,
+  type DriveSortOption,
   FOLDER_MIME_TYPE,
   type NamingStyle,
   type RenameAuditEntry,
   type RenameTarget,
 } from './types';
 import { formatFilenamePreview } from './lib/naming';
+import {
+  CORE_EXCLUDED_EXTENSIONS,
+  DEFAULT_EXCLUDED_EXTENSIONS,
+  DRIVE_SORT_OPTIONS,
+  isExcludedFile,
+  normalizeExtension,
+  sortDriveFiles,
+} from './lib/driveUtils';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { RenameConfirmModal } from './components/RenameConfirmModal';
 import { SnippetDrawer } from './components/SnippetDrawer';
@@ -45,6 +54,23 @@ import { DrivePickerModal } from './components/DrivePickerModal';
 
 const AUDIT_STORAGE_KEY = 'drivetopic_audit_log_v1';
 const SELECTED_IDS_STORAGE_KEY = 'drivetopic_selected_ids_v1';
+const EXCLUDED_EXT_STORAGE_KEY = 'drivetopic_excluded_extensions_v1';
+
+function loadPersistedExcludedExtensions(): string[] {
+  const base = Array.from(DEFAULT_EXCLUDED_EXTENSIONS);
+  try {
+    const raw = localStorage.getItem(EXCLUDED_EXT_STORAGE_KEY);
+    if (!raw) return base;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return base;
+    const normalized = parsed
+      .map((item) => (typeof item === 'string' ? normalizeExtension(item) : null))
+      .filter((ext): ext is string => ext !== null);
+    return Array.from(new Set([...CORE_EXCLUDED_EXTENSIONS, ...normalized]));
+  } catch {
+    return base;
+  }
+}
 
 function loadPersistedSelectedIds(): Set<string> {
   try {
@@ -78,9 +104,6 @@ function formatShortDate(iso?: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function isExcludedExtensionName(name: string): boolean {
-  return /\.(css|js|apsx|aspx)$/i.test(name.trim());
-}
 
 function friendlyMimeLabel(mimeType: string): string {
   if (mimeType === FOLDER_MIME_TYPE) return 'Folder';
@@ -113,6 +136,10 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
 
   const [namingStyle, setNamingStyle] = useState<NamingStyle>('title-case');
+  const [sortOption, setSortOption] = useState<DriveSortOption>('created-asc');
+  const [excludedExtensions, setExcludedExtensions] = useState<string[]>(
+    loadPersistedExcludedExtensions
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'unscanned' | 'ready' | 'renamed'>('all');
 
@@ -148,6 +175,27 @@ export default function App() {
       // Ignore storage quota issues
     }
   }, [auditEntries]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EXCLUDED_EXT_STORAGE_KEY, JSON.stringify(excludedExtensions));
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [excludedExtensions]);
+
+  const handleAddExcludedExtensions = useCallback((exts: string[]) => {
+    setExcludedExtensions((prev) => Array.from(new Set([...prev, ...exts])));
+  }, []);
+
+  const handleRemoveExcludedExtension = useCallback((ext: string) => {
+    if (CORE_EXCLUDED_EXTENSIONS.has(ext)) return;
+    setExcludedExtensions((prev) => prev.filter((item) => item !== ext));
+  }, []);
+
+  const handleResetExcludedExtensions = useCallback(() => {
+    setExcludedExtensions(Array.from(DEFAULT_EXCLUDED_EXTENSIONS));
+  }, []);
 
   const appendAuditEntry = useCallback((entry: Omit<RenameAuditEntry, 'id' | 'timestamp'>) => {
     const record: RenameAuditEntry = {
@@ -201,7 +249,7 @@ export default function App() {
 
         const rawList = Array.isArray(data) ? data : [];
         const fetched = rawList.filter(
-          (f) => !isFolderItem(f) && !isExcludedExtensionName(f.name)
+          (f) => !isFolderItem(f) && !isExcludedFile(f.name, f.mimeType, ['.js', '.css'])
         );
 
         const prevCache = knownFilesRef.current;
@@ -564,6 +612,8 @@ export default function App() {
     const token = requireToken();
     if (!token) return;
     setBannerError(null);
+    // Ensure initial sort is oldest-to-newest creation date when opening the Drive interface
+    setSortOption('created-asc');
     setIsDrivePickerOpen(true);
   };
 
@@ -576,7 +626,10 @@ export default function App() {
       const result = await openGoogleDrivePicker(token);
       if (result.picked) {
         for (const doc of result.docs) {
-          if (doc.mimeType !== FOLDER_MIME_TYPE && !isExcludedExtensionName(doc.name)) {
+          if (
+            doc.mimeType !== FOLDER_MIME_TYPE &&
+            !isExcludedFile(doc.name, doc.mimeType, excludedExtensions)
+          ) {
             persistedSelectedIdsRef.current.add(doc.id);
           }
         }
@@ -841,43 +894,48 @@ export default function App() {
     });
   };
 
-  const documentFiles = useMemo(() => files.filter((f) => !isFolderItem(f)), [files]);
+  const rawDriveFiles = useMemo(() => files.filter((f) => !isFolderItem(f)), [files]);
+
+  const documentFiles = useMemo(
+    () =>
+      rawDriveFiles.filter(
+        (f) => !isExcludedFile(f.name, f.mimeType, excludedExtensions)
+      ),
+    [rawDriveFiles, excludedExtensions]
+  );
 
   const allKnownDocumentFiles = useMemo(
-    () => Object.values(knownFilesById).filter((f) => !isFolderItem(f)),
-    [knownFilesById]
+    () =>
+      Object.values(knownFilesById).filter(
+        (f) => !isFolderItem(f) && !isExcludedFile(f.name, f.mimeType, excludedExtensions)
+      ),
+    [knownFilesById, excludedExtensions]
   );
 
   const filteredFiles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return documentFiles
-      .filter((f) => {
-        if (selectedCategory !== null) {
-          const itemCategory = (f.category || f.coreTopic || '').trim();
-          if (itemCategory !== selectedCategory) return false;
-        }
+    const filtered = documentFiles.filter((f) => {
+      if (selectedCategory !== null) {
+        const itemCategory = (f.category || f.coreTopic || '').trim();
+        if (itemCategory !== selectedCategory) return false;
+      }
 
-        if (statusFilter !== 'all') {
-          if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
-          if (statusFilter === 'ready' && f.status !== 'ready') return false;
-          if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
-        }
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
+        if (statusFilter === 'ready' && f.status !== 'ready') return false;
+        if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
+      }
 
-        if (!q) return true;
-        return (
-          f.name.toLowerCase().includes(q) ||
-          (f.coreTopic || '').toLowerCase().includes(q) ||
-          (f.category || '').toLowerCase().includes(q) ||
-          (f.editedName || f.proposedName || '').toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => {
-        const aTime = Date.parse(a.createdTime || a.modifiedTime || '') || 0;
-        const bTime = Date.parse(b.createdTime || b.modifiedTime || '') || 0;
-        if (aTime !== bTime) return aTime - bTime;
-        return a.name.localeCompare(b.name);
-      });
-  }, [documentFiles, searchQuery, selectedCategory, statusFilter]);
+      if (!q) return true;
+      return (
+        f.name.toLowerCase().includes(q) ||
+        (f.coreTopic || '').toLowerCase().includes(q) ||
+        (f.category || '').toLowerCase().includes(q) ||
+        (f.editedName || f.proposedName || '').toLowerCase().includes(q)
+      );
+    });
+    return sortDriveFiles(filtered, sortOption);
+  }, [documentFiles, searchQuery, selectedCategory, statusFilter, sortOption]);
 
   const selectableVisibleDocs = filteredFiles;
 
@@ -1537,6 +1595,24 @@ export default function App() {
                       <option value="snake_case">snake_case</option>
                     </select>
                   </div>
+
+                  <div className="flex items-center justify-between gap-2 sm:justify-start">
+                    <label htmlFor="workspace-sort-select" className="text-xs font-medium text-slate-500">
+                      Sort
+                    </label>
+                    <select
+                      id="workspace-sort-select"
+                      value={sortOption}
+                      onChange={(e) => setSortOption(e.target.value as DriveSortOption)}
+                      className="h-10 flex-1 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-800 focus:border-blue-600 focus:outline-none sm:h-9 sm:flex-none"
+                    >
+                      {DRIVE_SORT_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
@@ -1597,12 +1673,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Flattened All-Files Batch Bar (folders omitted, earliest-to-latest creation sort) */}
+              {/* Flattened All-Files Batch Bar (folders omitted, configurable sort & exclusions) */}
               <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                 <span className="text-xs text-slate-600 tabular-nums">
                   Showing {selectableVisibleDocs.length}{' '}
                   {selectableVisibleDocs.length === 1 ? 'file' : 'files'} across all folders and subfolders
-                  {selectedCategory ? ` in "${selectedCategory}"` : ''} · Sorted earliest → latest created
+                  {selectedCategory ? ` in "${selectedCategory}"` : ''} ·{' '}
+                  {DRIVE_SORT_OPTIONS.find((o) => o.value === sortOption)?.label}
                 </span>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -2123,8 +2200,14 @@ export default function App() {
 
       <DrivePickerModal
         isOpen={isDrivePickerOpen}
-        files={documentFiles}
+        files={rawDriveFiles}
         isLoading={isLoadingFiles}
+        sortOption={sortOption}
+        onSortChange={setSortOption}
+        excludedExtensions={excludedExtensions}
+        onAddExcludedExtensions={handleAddExcludedExtensions}
+        onRemoveExcludedExtension={handleRemoveExcludedExtension}
+        onResetExcludedExtensions={handleResetExcludedExtensions}
         onRefresh={() => loadDriveFiles()}
         onLaunchExternalPicker={handleLaunchGooglePicker}
         onApplySelection={handleApplyPickerSelection}
