@@ -548,6 +548,7 @@ function filterAndAnnotateDriveItems(rawItems: RawDriveFile[]): Array<RawDriveFi
 
   const results: Array<RawDriveFile & { folderPath?: string }> = [];
   for (const item of itemsById.values()) {
+    if (item.mimeType === FOLDER_MIME_TYPE) continue;
     if (isItemOrAncestorExcluded(item.id)) continue;
     results.push({
       ...item,
@@ -645,7 +646,12 @@ async function startServer() {
 
         const folderPath = breadcrumbs.map((b) => b.name).join(' / ') || undefined;
         const filtered = directChildren
-          .filter((item) => item.mimeType !== SHORTCUT_MIME_TYPE && !isExcludedExtensionName(item.name))
+          .filter(
+            (item) =>
+              item.mimeType !== FOLDER_MIME_TYPE &&
+              item.mimeType !== SHORTCUT_MIME_TYPE &&
+              !isExcludedExtensionName(item.name)
+          )
           .map((item) => ({ ...item, folderPath }));
 
         res.json({ files: filtered, breadcrumbs });

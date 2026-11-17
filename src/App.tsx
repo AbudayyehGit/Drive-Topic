@@ -3,16 +3,11 @@ import {
   AlertCircle,
   Check,
   CheckCircle2,
-  ChevronRight,
   Clock,
   ExternalLink,
   FilePlus2,
   FileText,
-  Folder,
   FolderOpen,
-  FolderPlus,
-  Home,
-  Layers,
   Loader2,
   LogOut,
   RefreshCw,
@@ -30,7 +25,6 @@ import {
 } from './lib/auth';
 import {
   type AnalyzeResponseItem,
-  type DriveBreadcrumb,
   type DriveFileItem,
   FOLDER_MIME_TYPE,
   type NamingStyle,
@@ -119,18 +113,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'workspace' | 'audit' | 'guide'>('workspace');
   const [files, setFiles] = useState<DriveFileItem[]>([]);
   const [knownFilesById, setKnownFilesById] = useState<Record<string, DriveFileItem>>({});
-  const [viewMode, setViewMode] = useState<'folders' | 'all'>('all');
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
-  const [breadcrumbs, setBreadcrumbs] = useState<DriveBreadcrumb[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isAnalyzingBatch, setIsAnalyzingBatch] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [showNewFolderBar, setShowNewFolderBar] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
 
   const [namingStyle, setNamingStyle] = useState<NamingStyle>('title-case');
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,16 +133,11 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const knownFilesRef = useRef<Record<string, DriveFileItem>>({});
-  const currentFolderIdRef = useRef<string | null>(null);
   const persistedSelectedIdsRef = useRef<Set<string>>(loadPersistedSelectedIds());
 
   useEffect(() => {
     knownFilesRef.current = knownFilesById;
   }, [knownFilesById]);
-
-  useEffect(() => {
-    currentFolderIdRef.current = currentFolderId;
-  }, [currentFolderId]);
 
   const [auditEntries, setAuditEntries] = useState<RenameAuditEntry[]>(() => {
     try {
@@ -194,21 +177,15 @@ export default function App() {
   }, []);
 
   const loadDriveFiles = useCallback(
-    async (explicitToken?: string, folderIdOverride?: string | null) => {
+    async (explicitToken?: string) => {
       const token = explicitToken ?? requireToken();
       if (!token) return;
-
-      const targetFolderId =
-        folderIdOverride !== undefined ? folderIdOverride : currentFolderIdRef.current;
 
       setIsLoadingFiles(true);
       setBannerError(null);
 
       try {
-        const endpoint = targetFolderId
-          ? `/api/drive/files?folderId=${encodeURIComponent(targetFolderId)}`
-          : '/api/drive/files';
-        const res = await fetch(endpoint, {
+        const res = await fetch('/api/drive/files', {
           headers: { Authorization: `Bearer ${token}` },
         });
         const data = (await res.json()) as {
@@ -222,7 +199,6 @@ export default function App() {
             parents?: string[];
             folderPath?: string;
           }>;
-          breadcrumbs?: DriveBreadcrumb[];
           error?: string;
         };
 
@@ -231,19 +207,15 @@ export default function App() {
           throw new Error(data.error || 'Failed to fetch Drive files.');
         }
 
-        const fetched = (data.files || []).filter((f) => !isExcludedExtensionName(f.name));
-        setBreadcrumbs(targetFolderId ? data.breadcrumbs || [] : []);
+        const fetched = (data.files || []).filter(
+          (f) => !isFolderItem(f) && !isExcludedExtensionName(f.name)
+        );
 
         const prevCache = knownFilesRef.current;
         const selectedSet = persistedSelectedIdsRef.current;
         const mergedItems: DriveFileItem[] = fetched.map((f) => {
           const existing = prevCache[f.id];
-          const isFolder = isFolderItem(f);
-          const isSelected = isFolder
-            ? false
-            : existing
-              ? Boolean(existing.selected)
-              : selectedSet.has(f.id);
+          const isSelected = existing ? Boolean(existing.selected) : selectedSet.has(f.id);
 
           if (existing) {
             return {
@@ -296,7 +268,7 @@ export default function App() {
         setNeedsAuth(false);
         if (lastLoadedTokenRef.current !== token) {
           lastLoadedTokenRef.current = token;
-          void loadDriveFiles(token, null);
+          void loadDriveFiles(token);
         }
       },
       () => {
@@ -322,7 +294,7 @@ export default function App() {
       setUser(result.user);
       setNeedsAuth(false);
       lastLoadedTokenRef.current = result.accessToken;
-      await loadDriveFiles(result.accessToken, null);
+      await loadDriveFiles(result.accessToken);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Google sign-in failed.';
       setBannerError(msg);
@@ -337,8 +309,6 @@ export default function App() {
     setUser(null);
     setFiles([]);
     setKnownFilesById({});
-    setCurrentFolderId(null);
-    setBreadcrumbs([]);
     setSelectedCategory(null);
     setNeedsAuth(true);
     setBannerNotice('Signed out from Google Drive.');
@@ -370,85 +340,9 @@ export default function App() {
     });
   };
 
-  const openFolder = useCallback(
-    async (folderId: string | null) => {
-      setViewMode('folders');
-      setCurrentFolderId(folderId);
-      currentFolderIdRef.current = folderId;
-      await loadDriveFiles(undefined, folderId);
-    },
-    [loadDriveFiles]
-  );
-
-  const switchViewMode = useCallback(
-    async (mode: 'folders' | 'all') => {
-      setViewMode(mode);
-      if (mode === 'all' && currentFolderIdRef.current !== null) {
-        setCurrentFolderId(null);
-        currentFolderIdRef.current = null;
-        await loadDriveFiles(undefined, null);
-      }
-    },
-    [loadDriveFiles]
-  );
-
-  const handleSelectCategory = useCallback(
-    (category: string | null) => {
-      setSelectedCategory(category);
-      if (category !== null && currentFolderIdRef.current !== null) {
-        setViewMode('all');
-        setCurrentFolderId(null);
-        currentFolderIdRef.current = null;
-        void loadDriveFiles(undefined, null);
-      }
-    },
-    [loadDriveFiles]
-  );
-
-  const handleCreateFolder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = newFolderName.trim();
-    if (!trimmed) return;
-    const token = requireToken();
-    if (!token) return;
-
-    setIsCreatingFolder(true);
-    setBannerError(null);
-    setBannerNotice(null);
-
-    try {
-      const res = await fetch('/api/drive/folders', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: trimmed,
-          parentId: currentFolderId ?? undefined,
-        }),
-      });
-      const data = (await res.json()) as {
-        folder?: { id: string; name: string };
-        error?: string;
-      };
-
-      if (!res.ok || !data.folder) {
-        if (res.status === 401) setNeedsAuth(true);
-        throw new Error(data.error || 'Failed to create Drive folder.');
-      }
-
-      setNewFolderName('');
-      setShowNewFolderBar(false);
-      await loadDriveFiles(token, currentFolderId);
-      setBannerNotice(`Created folder "${data.folder.name}" in Google Drive.`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Folder creation failed.';
-      setBannerError(msg);
-    } finally {
-      setIsCreatingFolder(false);
-    }
-  };
+  const handleSelectCategory = useCallback((category: string | null) => {
+    setSelectedCategory(category);
+  }, []);
 
   const handleAnalyzeFiles = async (targetFiles: DriveFileItem[]) => {
     const token = requireToken();
@@ -598,9 +492,9 @@ export default function App() {
         });
       }
 
-      await loadDriveFiles(token, currentFolderId);
+      await loadDriveFiles(token);
       setBannerNotice(
-        `Created ${data.files?.length || 0} sample documents (including nested folders) in your Google Drive.`
+        `Created ${data.files?.length || 0} sample documents across nested folders in your Google Drive.`
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to create sample files.';
@@ -635,7 +529,6 @@ export default function App() {
             name: localFile.name,
             content: textContent.slice(0, 200000),
             mimeType: localFile.type || 'text/plain',
-            parentId: currentFolderId ?? undefined,
           }),
         });
         const data = (await res.json()) as {
@@ -658,7 +551,7 @@ export default function App() {
           });
         }
       }
-      await loadDriveFiles(token, currentFolderId);
+      await loadDriveFiles(token);
       setBannerNotice(
         `Uploaded ${uploadedCount} ${uploadedCount === 1 ? 'file' : 'files'} to Google Drive.`
       );
@@ -685,7 +578,7 @@ export default function App() {
           }
         }
         savePersistedSelectedIds(persistedSelectedIdsRef.current);
-        await loadDriveFiles(token, viewMode === 'all' ? null : currentFolderId);
+        await loadDriveFiles(token);
         setBannerNotice(
           `Authorized ${result.docs.length} ${result.docs.length === 1 ? 'item' : 'items'} from Google Drive and loaded nested files.`
         );
@@ -935,59 +828,15 @@ export default function App() {
     [knownFilesById]
   );
 
-  const folderNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of Object.values(knownFilesById)) {
-      if (isFolderItem(item)) map.set(item.id, item.name);
-    }
-    for (const item of files) {
-      if (isFolderItem(item)) map.set(item.id, item.name);
-    }
-    return map;
-  }, [files, knownFilesById]);
-
-  const folderChildCountMap = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of files) {
-      for (const parentId of item.parents || []) {
-        counts.set(parentId, (counts.get(parentId) || 0) + 1);
-      }
-    }
-    return counts;
-  }, [files]);
-
-  const scopedItems = useMemo(() => {
-    // When a category filter is active or "All Files" batch mode is selected, show document files flatly
-    if (viewMode === 'all' || selectedCategory !== null) {
-      return documentFiles;
-    }
-
-    // At Drive root in Folder mode, hide nested children that belong to an accessible folder
-    if (currentFolderId === null) {
-      const accessibleFolderIds = new Set(files.filter(isFolderItem).map((f) => f.id));
-      return files.filter((f) => {
-        const parents = f.parents || [];
-        return !parents.some((pid) => accessibleFolderIds.has(pid));
-      });
-    }
-
-    // Inside a subfolder, API returns direct children
-    return files;
-  }, [currentFolderId, documentFiles, files, selectedCategory, viewMode]);
-
   const filteredFiles = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const list = scopedItems.filter((f) => {
-      const isFolder = isFolderItem(f);
-
+    return documentFiles.filter((f) => {
       if (selectedCategory !== null) {
-        if (isFolder) return false;
         const itemCategory = (f.category || f.coreTopic || '').trim();
         if (itemCategory !== selectedCategory) return false;
       }
 
       if (statusFilter !== 'all') {
-        if (isFolder) return false;
         if (statusFilter === 'unscanned' && f.status !== 'unscanned') return false;
         if (statusFilter === 'ready' && f.status !== 'ready') return false;
         if (statusFilter === 'renamed' && f.status !== 'renamed') return false;
@@ -996,26 +845,15 @@ export default function App() {
       if (!q) return true;
       return (
         f.name.toLowerCase().includes(q) ||
+        (f.folderPath || '').toLowerCase().includes(q) ||
         (f.coreTopic || '').toLowerCase().includes(q) ||
         (f.category || '').toLowerCase().includes(q) ||
         (f.editedName || f.proposedName || '').toLowerCase().includes(q)
       );
     });
+  }, [documentFiles, searchQuery, selectedCategory, statusFilter]);
 
-    // Always sort folders before document files
-    return [...list].sort((a, b) => {
-      const aFolder = isFolderItem(a) ? 0 : 1;
-      const bFolder = isFolderItem(b) ? 0 : 1;
-      if (aFolder !== bFolder) return aFolder - bFolder;
-      if (aFolder === 0) return a.name.localeCompare(b.name);
-      return 0;
-    });
-  }, [scopedItems, searchQuery, selectedCategory, statusFilter]);
-
-  const selectableVisibleDocs = useMemo(
-    () => filteredFiles.filter((f) => !isFolderItem(f)),
-    [filteredFiles]
-  );
+  const selectableVisibleDocs = filteredFiles;
 
   const selectedVisibleDocsCount = useMemo(
     () => selectableVisibleDocs.filter((f) => Boolean(f.selected)).length,
@@ -1075,7 +913,6 @@ export default function App() {
 
   const stats = useMemo(() => {
     const total = documentFiles.length;
-    const folderCount = files.filter(isFolderItem).length;
     const analyzed = documentFiles.filter(
       (f) => f.status === 'ready' || f.status === 'renamed'
     ).length;
@@ -1098,14 +935,13 @@ export default function App() {
     const selectedForAnalysis = documentFiles.filter((f) => f.selected).length;
     return {
       total,
-      folderCount,
       analyzed,
       pendingRenames,
       completedRenames,
       selectedReadyForRename,
       selectedForAnalysis,
     };
-  }, [documentFiles, files, auditEntries, namingStyle]);
+  }, [documentFiles, auditEntries, namingStyle]);
 
   const selectedFiles = useMemo(
     () => documentFiles.filter((f) => Boolean(f.selected)),
@@ -1176,7 +1012,7 @@ export default function App() {
       }
 
       if (event.key === 'Enter') {
-        if (tag === 'textarea' || target?.id === 'new-folder-name') return;
+        if (tag === 'textarea') return;
         if (stats.selectedReadyForRename === 0 || isExecutingRename) return;
         event.preventDefault();
         requestBatchRename();
@@ -1727,84 +1563,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Folder Navigation, Breadcrumbs & All-Files Batch Bar */}
-              <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                  <div
-                    role="group"
-                    aria-label="Drive view mode"
-                    className="inline-flex rounded-md border border-slate-200 bg-slate-100 p-0.5"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void switchViewMode('all')}
-                      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
-                        viewMode === 'all' || selectedCategory !== null
-                          ? 'bg-white text-slate-900 shadow-sm'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Layers className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>All Files</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void switchViewMode('folders')}
-                      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap ${
-                        viewMode === 'folders' && selectedCategory === null
-                          ? 'bg-white text-slate-900 shadow-sm'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      <Folder className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Folders</span>
-                    </button>
-                  </div>
-
-                  {viewMode === 'folders' && selectedCategory === null ? (
-                    <nav aria-label="Folder breadcrumbs" className="flex flex-wrap items-center gap-1 text-xs">
-                      <button
-                        type="button"
-                        onClick={() => void openFolder(null)}
-                        className={`inline-flex items-center gap-1 rounded px-2 py-1 font-medium transition-colors ${
-                          currentFolderId === null
-                            ? 'bg-white text-slate-900 shadow-2xs ring-1 ring-slate-200'
-                            : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
-                        }`}
-                      >
-                        <Home className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Drive Root</span>
-                      </button>
-
-                      {breadcrumbs.map((crumb, index) => {
-                        const isLast = index === breadcrumbs.length - 1;
-                        return (
-                          <React.Fragment key={crumb.id}>
-                            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
-                            <button
-                              type="button"
-                              onClick={() => void openFolder(crumb.id)}
-                              className={`max-w-[180px] truncate rounded px-2 py-1 font-medium transition-colors ${
-                                isLast
-                                  ? 'bg-white text-slate-900 shadow-2xs ring-1 ring-slate-200'
-                                  : 'text-slate-600 hover:bg-slate-200/60 hover:text-slate-900'
-                              }`}
-                              title={crumb.name}
-                            >
-                              {crumb.name}
-                            </button>
-                          </React.Fragment>
-                        );
-                      })}
-                    </nav>
-                  ) : (
-                    <span className="text-xs text-slate-600 tabular-nums">
-                      Showing all {selectableVisibleDocs.length} accessible{' '}
-                      {selectableVisibleDocs.length === 1 ? 'document' : 'documents'}
-                      {selectedCategory ? ` in "${selectedCategory}"` : ' across folders'}
-                    </span>
-                  )}
-                </div>
+              {/* Flattened All-Files Batch Bar (folders omitted, nested files included) */}
+              <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50/70 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                <span className="text-xs text-slate-600 tabular-nums">
+                  Showing {selectableVisibleDocs.length}{' '}
+                  {selectableVisibleDocs.length === 1 ? 'file' : 'files'} across all folders and subfolders
+                  {selectedCategory ? ` in "${selectedCategory}"` : ''}
+                </span>
 
                 <div className="flex flex-wrap items-center gap-2">
                   {selectableVisibleDocs.length > 0 && (
@@ -1813,6 +1578,7 @@ export default function App() {
                       onClick={
                         allVisibleSelected ? clearAllSelection : selectAllDocumentsInScope
                       }
+                      title="Select all visible files (Ctrl+A)"
                       className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap"
                     >
                       <span>
@@ -1822,57 +1588,8 @@ export default function App() {
                       </span>
                     </button>
                   )}
-
-                  {viewMode === 'folders' && (
-                    <button
-                      type="button"
-                      onClick={() => setShowNewFolderBar((prev) => !prev)}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap"
-                    >
-                      <FolderPlus className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
-                      <span>New Folder</span>
-                    </button>
-                  )}
                 </div>
               </div>
-
-              {showNewFolderBar && (
-                <form
-                  onSubmit={(e) => void handleCreateFolder(e)}
-                  className="flex flex-col gap-2 border-b border-slate-200 bg-blue-50/50 px-4 py-3 sm:flex-row sm:items-center sm:px-6"
-                >
-                  <label htmlFor="new-folder-name" className="text-xs font-medium text-slate-700 whitespace-nowrap">
-                    {currentFolderId ? 'New subfolder name:' : 'New folder name:'}
-                  </label>
-                  <input
-                    id="new-folder-name"
-                    type="text"
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    placeholder="e.g., Q4 Architecture Docs"
-                    className="h-9 flex-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 focus:border-blue-600 focus:outline-none sm:max-w-xs"
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="submit"
-                      disabled={isCreatingFolder || !newFolderName.trim()}
-                      className="inline-flex h-9 items-center rounded-md bg-blue-600 px-3 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {isCreatingFolder ? 'Creating...' : 'Create Folder'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowNewFolderBar(false);
-                        setNewFolderName('');
-                      }}
-                      className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              )}
 
               {/* Loading Skeleton */}
               {isLoadingFiles && files.length === 0 ? (
@@ -1886,37 +1603,7 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-              ) : files.length === 0 && currentFolderId !== null ? (
-                <div className="px-4 py-12 text-center sm:px-6">
-                  <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
-                    <FolderOpen className="h-5 w-5" aria-hidden="true" />
-                  </div>
-                  <h2 className="mt-4 text-base font-semibold text-slate-900">
-                    This Google Drive folder is empty
-                  </h2>
-                  <p className="mx-auto mt-1.5 max-w-md text-sm text-slate-600">
-                    Upload files directly into this folder, create a subfolder, or navigate back to Drive Root.
-                  </p>
-                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => void openFolder(null)}
-                      className="inline-flex h-10 items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      <Home className="h-4 w-4" aria-hidden="true" />
-                      <span>Back to Drive Root</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex h-10 items-center gap-1.5 rounded-md bg-blue-600 px-3.5 text-sm font-medium text-white hover:bg-blue-700"
-                    >
-                      <Upload className="h-4 w-4" aria-hidden="true" />
-                      <span>Upload to Folder</span>
-                    </button>
-                  </div>
-                </div>
-              ) : files.length === 0 ? (
+              ) : documentFiles.length === 0 ? (
                 /* Empty State */
                 <div className="px-4 py-12 text-center sm:px-6 sm:py-16">
                   <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
@@ -1992,47 +1679,6 @@ export default function App() {
 
                     <div className="divide-y divide-slate-200">
                       {filteredFiles.map((file) => {
-                        if (isFolderItem(file)) {
-                          const childCount = folderChildCountMap.get(file.id);
-                          return (
-                            <div
-                              key={file.id}
-                              className="flex items-center justify-between gap-3 bg-slate-50/40 px-4 py-3.5"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => void openFolder(file.id)}
-                                className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                              >
-                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-blue-600">
-                                  <Folder className="h-4 w-4" aria-hidden="true" />
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                  <div className="truncate text-sm font-semibold text-slate-900">
-                                    {file.name}
-                                  </div>
-                                  <div className="mt-0.5 text-xs text-slate-500 tabular-nums">
-                                    Folder
-                                    {childCount !== undefined && childCount > 0
-                                      ? ` · ${childCount} ${childCount === 1 ? 'item' : 'items'}`
-                                      : ''}
-                                    {file.modifiedTime ? ` · ${formatShortDate(file.modifiedTime)}` : ''}
-                                  </div>
-                                </div>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={() => void openFolder(file.id)}
-                                className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-                              >
-                                <span>Open</span>
-                                <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                              </button>
-                            </div>
-                          );
-                        }
-
                         const proposedValue = file.editedName ?? file.proposedName ?? '';
                         const formattedProposed = proposedValue.trim()
                           ? formatFilenamePreview(proposedValue, file.name, file.mimeType, namingStyle)
@@ -2041,11 +1687,7 @@ export default function App() {
                           (file.status === 'ready' || file.status === 'renamed') &&
                           formattedProposed.length > 0 &&
                           formattedProposed !== file.name;
-                        const parentFolderName =
-                          viewMode === 'all'
-                            ? file.folderPath ||
-                              (file.parents?.[0] ? folderNameById.get(file.parents[0]) : undefined)
-                            : undefined;
+                        const parentFolderName = file.folderPath;
 
                         return (
                           <div key={file.id} className="space-y-3 px-4 py-4">
@@ -2240,7 +1882,7 @@ export default function App() {
                               ariaLabel="Select all visible documents"
                             />
                           </th>
-                          <th className="px-4 py-3">Original File / Folder</th>
+                          <th className="px-4 py-3">Original File</th>
                           <th className="px-4 py-3">Core Topic &amp; Summary</th>
                           <th className="px-4 py-3">Proposed Filename</th>
                           <th className="px-4 py-3">Status</th>
@@ -2249,74 +1891,6 @@ export default function App() {
                       </thead>
                       <tbody className="divide-y divide-slate-200">
                         {filteredFiles.map((file) => {
-                          if (isFolderItem(file)) {
-                            const childCount = folderChildCountMap.get(file.id);
-                            return (
-                              <tr key={file.id} className="bg-slate-50/40 hover:bg-slate-100/70">
-                                <td className="px-6 py-3.5">
-                                  <Folder className="h-4 w-4 text-blue-600" aria-hidden="true" />
-                                </td>
-                                <td className="max-w-[260px] px-4 py-3.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => void openFolder(file.id)}
-                                    className="truncate text-left font-semibold text-slate-900 hover:text-blue-600 hover:underline"
-                                    title={`Open folder ${file.name}`}
-                                  >
-                                    {file.name}
-                                  </button>
-                                  <div className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-500 tabular-nums">
-                                    <span>Drive Folder</span>
-                                    {childCount !== undefined && childCount > 0 && (
-                                      <>
-                                        <span aria-hidden="true">·</span>
-                                        <span>
-                                          {childCount} {childCount === 1 ? 'item' : 'items'}
-                                        </span>
-                                      </>
-                                    )}
-                                    {file.modifiedTime && (
-                                      <>
-                                        <span aria-hidden="true">·</span>
-                                        <span>{formatShortDate(file.modifiedTime)}</span>
-                                      </>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-4 py-3.5 text-xs text-slate-500">
-                                  Click to browse subfolders and nested files
-                                </td>
-                                <td className="px-4 py-3.5 text-xs text-slate-400">—</td>
-                                <td className="whitespace-nowrap px-4 py-3.5 text-xs font-medium text-slate-600">
-                                  Folder
-                                </td>
-                                <td className="whitespace-nowrap px-6 py-3.5 text-right">
-                                  <div className="inline-flex items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => void openFolder(file.id)}
-                                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-                                    >
-                                      <span>Open Folder</span>
-                                      <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                                    </button>
-                                    {file.webViewLink && (
-                                      <a
-                                        href={file.webViewLink}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        aria-label={`Open ${file.name} in Google Drive`}
-                                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                      >
-                                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                                      </a>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          }
-
                           const proposedValue = file.editedName ?? file.proposedName ?? '';
                           const formattedProposed = proposedValue.trim()
                             ? formatFilenamePreview(proposedValue, file.name, file.mimeType, namingStyle)
@@ -2325,11 +1899,7 @@ export default function App() {
                             (file.status === 'ready' || file.status === 'renamed') &&
                             formattedProposed.length > 0 &&
                             formattedProposed !== file.name;
-                          const parentFolderName =
-                            viewMode === 'all'
-                              ? file.folderPath ||
-                                (file.parents?.[0] ? folderNameById.get(file.parents[0]) : undefined)
-                              : undefined;
+                          const parentFolderName = file.folderPath;
 
                           return (
                             <tr key={file.id} className="align-top hover:bg-slate-50/70">
